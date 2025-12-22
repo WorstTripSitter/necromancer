@@ -1,3 +1,5 @@
+build/
+build/Release
 build/Release/WorldModulation.obj
 build/Release/WINAPI_WndProc.obj
 build/Release/VisualUtils.obj
@@ -173,6 +175,8 @@ build/Release/SEOwnedDE.dll.recipe
 bin/Release/SEOwnedDE.pdb
 bin/Release/SEOwnedDE.lib
 bin/Release/SEOwnedDE.exp
+bin/
+.vs/
 .vs/SEOwnedDE/v17/DocumentLayout.backup.json
 .vs/SEOwnedDE/v17/fileList.bin
 .vs/SEOwnedDE/v17/Solution.VC.db
