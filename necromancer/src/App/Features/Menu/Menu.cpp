@@ -34,6 +34,7 @@ struct PendingBanAlert_t
 {
 	std::string playerName;
 	int banCount;
+	uint64_t steamID64; // To look up team at display time
 };
 static std::vector<PendingBanAlert_t> g_vecPendingBanAlerts;
 static std::mutex g_mtxPendingAlerts;
@@ -50,18 +51,44 @@ void ProcessPendingBanAlerts()
 	if (!pLocal || pLocal->m_iClass() == TF_CLASS_UNDEFINED)
 		return;
 
+	int nLocalTeam = pLocal->m_iTeamNum();
+	auto pResource = GetTFPlayerResource();
+
 	for (const auto& alert : g_vecPendingBanAlerts)
 	{
+		// Find player's team
+		bool bIsTeammate = false;
+		for (int n = 1; n <= I::EngineClient->GetMaxClients(); n++)
+		{
+			player_info_t pi{};
+			if (I::EngineClient->GetPlayerInfo(n, &pi) && !pi.fakeplayer)
+			{
+				uint64_t playerSteamID = static_cast<uint64_t>(pi.friendsID) + 0x0110000100000000ULL;
+				if (playerSteamID == alert.steamID64)
+				{
+					if (pResource)
+						bIsTeammate = (pResource->GetTeam(n) == nLocalTeam);
+					break;
+				}
+			}
+		}
+
 		// Color based on ban count: yellow (1-2), orange (3+)
 		Color_t banColor = (alert.banCount <= 2) ? Color_t{ 255, 255, 0, 255 } : Color_t{ 255, 165, 0, 255 };
 		Color_t alertColor = { 255, 50, 50, 255 }; // Red for ALERT!
+		Color_t nameColor = bIsTeammate ? CFG::Color_Teammate : CFG::Color_Enemy;
+		Color_t teamColor = bIsTeammate ? CFG::Color_Teammate : CFG::Color_Enemy;
+		const char* teamStr = bIsTeammate ? "Teammate" : "Enemy";
 
 		I::ClientModeShared->m_pChatElement->ChatPrintf(0,
-			std::format("\x1PLAYER [{}] HAS \x8{}{} BANS \x8{}ALERT!",
+			std::format("\x1PLAYER [\x8{}{}] \x1HAS \x8{}{} BANS \x8{}ALERT! \x8{}({})",
+				nameColor.toHexStr(),
 				alert.playerName,
 				banColor.toHexStr(),
 				alert.banCount,
-				alertColor.toHexStr()).c_str());
+				alertColor.toHexStr(),
+				teamColor.toHexStr(),
+				teamStr).c_str());
 	}
 	g_vecPendingBanAlerts.clear();
 }
