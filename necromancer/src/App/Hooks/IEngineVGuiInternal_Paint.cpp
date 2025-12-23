@@ -1,6 +1,9 @@
 #include "../../SDK/SDK.h"
 
 #include "../Features/Menu/Menu.h"
+
+// Forward declaration to satisfy IntelliSense
+void ProcessPendingBanAlerts();
 #include "../Features/ESP/ESP.h"
 #include "../Features/Radar/Radar.h"
 #include "../Features/MiscVisuals/MiscVisuals.h"
