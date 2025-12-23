@@ -39,6 +39,7 @@
 #include "TF2/MD5.h"
 #include "TF2/c_tf_player.h"
 #include "TF2/CTFPartyClient.h"
+#include "TF2/CTFGCClientSystem.h"
 
 #include "Helpers/Draw/Draw.h"
 #include "Helpers/Entities/Entities.h"

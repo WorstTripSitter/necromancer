@@ -606,6 +606,51 @@ void CESP::Run()
 					H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "FIRE(UBER)");
 				}
 			}
+
+			// F2P and Party tags (positioned to the left of the health bar)
+			if (CFG::ESP_Players_Show_F2P || CFG::ESP_Players_Show_Party)
+			{
+				int nPlayerIndex = pPlayer->entindex();
+				// Health bar is at x - ((BAR_WIDTH * 2) + 1) - 1 = x - 6, so position tags further left
+				static constexpr int BAR_WIDTH = 2;
+				int drawX = x - ((BAR_WIDTH * 2) + 1) - 1 - SPACING_X;
+				int tall = H::Fonts->Get(EFonts::ESP_CONDS).m_nTall;
+				int nTagOffsetY = 0;
+
+				// Show F2P tag
+				if (CFG::ESP_Players_Show_F2P && H::Entities->IsF2P(nPlayerIndex))
+				{
+					H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTagOffsetY++), CFG::Color_F2P, POS_LEFT, "F2P");
+				}
+
+				// Show Party tag with party-specific color
+				if (CFG::ESP_Players_Show_Party)
+				{
+					int nPartyIndex = H::Entities->GetPartyIndex(nPlayerIndex);
+					if (nPartyIndex > 0 && nPartyIndex <= 12)
+					{
+						// Get party color based on index
+						Color_t partyColor;
+						switch (nPartyIndex)
+						{
+						case 1: partyColor = CFG::Color_Party_1; break;
+						case 2: partyColor = CFG::Color_Party_2; break;
+						case 3: partyColor = CFG::Color_Party_3; break;
+						case 4: partyColor = CFG::Color_Party_4; break;
+						case 5: partyColor = CFG::Color_Party_5; break;
+						case 6: partyColor = CFG::Color_Party_6; break;
+						case 7: partyColor = CFG::Color_Party_7; break;
+						case 8: partyColor = CFG::Color_Party_8; break;
+						case 9: partyColor = CFG::Color_Party_9; break;
+						case 10: partyColor = CFG::Color_Party_10; break;
+						case 11: partyColor = CFG::Color_Party_11; break;
+						case 12: partyColor = CFG::Color_Party_12; break;
+						default: partyColor = CFG::Color_Party_1; break;
+						}
+						H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTagOffsetY++), partyColor, POS_LEFT, "P%d", nPartyIndex);
+					}
+				}
+			}
 		}
 	}
 

@@ -6,6 +6,361 @@
 #include "../VisualUtils/VisualUtils.h"
 #include "../Players/Players.h"
 
+#include <winhttp.h>
+#include <nlohmann/json.hpp>
+#include <thread>
+#include <mutex>
+#include <set>
+
+#pragma comment(lib, "winhttp.lib")
+
+// Sourcebans data structure
+struct SourcebanInfo_t
+{
+	bool m_bFetched = false;
+	bool m_bFetching = false;
+	bool m_bHasBans = false;
+	bool m_bAlertDismissed = false; // Alert dismissed when user views profile
+	std::vector<std::string> m_vecBans; // "Server: Reason (State)"
+};
+
+static std::map<uint64_t, SourcebanInfo_t> g_mapSourcebans;
+static std::mutex g_mtxSourcebans;
+static std::set<uint64_t> g_setCheckedPlayers; // Track which players we've already queued for checking
+static bool g_bWasConnected = false; // Track connection state to detect new game joins
+
+// Pending chat alerts to be processed on main thread
+struct PendingBanAlert_t
+{
+	std::string playerName;
+	int banCount;
+};
+static std::vector<PendingBanAlert_t> g_vecPendingBanAlerts;
+static std::mutex g_mtxPendingAlerts;
+
+// Process pending ban alerts on main thread (call from Paint hook or similar)
+void ProcessPendingBanAlerts()
+{
+	std::lock_guard<std::mutex> lock(g_mtxPendingAlerts);
+	if (g_vecPendingBanAlerts.empty())
+		return;
+
+	// Wait until local player exists and has chosen a class
+	const auto pLocal = H::Entities->GetLocal();
+	if (!pLocal || pLocal->m_iClass() == TF_CLASS_UNDEFINED)
+		return;
+
+	for (const auto& alert : g_vecPendingBanAlerts)
+	{
+		// Color based on ban count: yellow (1-2), orange (3+)
+		Color_t banColor = (alert.banCount <= 2) ? Color_t{ 255, 255, 0, 255 } : Color_t{ 255, 165, 0, 255 };
+		Color_t alertColor = { 255, 50, 50, 255 }; // Red for ALERT!
+
+		I::ClientModeShared->m_pChatElement->ChatPrintf(0,
+			std::format("\x1PLAYER [{}] HAS \x8{}{} BANS \x8{}ALERT!",
+				alert.playerName,
+				banColor.toHexStr(),
+				alert.banCount,
+				alertColor.toHexStr()).c_str());
+	}
+	g_vecPendingBanAlerts.clear();
+}
+
+// Dismiss alert for a player (called when viewing their profile)
+static void DismissSourcebansAlert(uint64_t steamID64)
+{
+	std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+	if (g_mapSourcebans.count(steamID64) > 0)
+		g_mapSourcebans[steamID64].m_bAlertDismissed = true;
+}
+
+// Async function to fetch sourcebans for multiple players (batch)
+static void FetchSourcebansBatch(const std::vector<uint64_t>& steamIDs)
+{
+	if (steamIDs.empty())
+		return;
+
+	// Mark all as fetching
+	{
+		std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+		for (uint64_t id : steamIDs)
+		{
+			if (!g_mapSourcebans[id].m_bFetched && !g_mapSourcebans[id].m_bFetching)
+				g_mapSourcebans[id].m_bFetching = true;
+		}
+	}
+
+	std::thread([steamIDs]()
+	{
+		// Build comma-separated list of Steam IDs (max 100 per API call)
+		std::wstring steamIdList;
+		for (size_t i = 0; i < steamIDs.size() && i < 100; i++)
+		{
+			if (i > 0) steamIdList += L",";
+			wchar_t buf[32];
+			swprintf_s(buf, L"%llu", steamIDs[i]);
+			steamIdList += buf;
+		}
+
+		I::CVar->ConsoleColorPrintf({ 150, 200, 255, 255 }, "[Sourcebans] Checking %d players...\n", static_cast<int>(steamIDs.size()));
+
+		HINTERNET hSession = WinHttpOpen(L"Necromancer/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+		if (hSession)
+		{
+			HINTERNET hConnect = WinHttpConnect(hSession, L"steamhistory.net", INTERNET_DEFAULT_HTTPS_PORT, 0);
+			if (hConnect)
+			{
+				std::wstring path = L"/api/sourcebans?key=ebef9bef3d940cb190b5328697524103&shouldkey=1&steamids=" + steamIdList; //dummy account generated this key
+
+				HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+				if (hRequest)
+				{
+					if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+					{
+						if (WinHttpReceiveResponse(hRequest, NULL))
+						{
+							std::string response;
+							DWORD dwSize = 0;
+							DWORD dwDownloaded = 0;
+
+							do
+							{
+								dwSize = 0;
+								WinHttpQueryDataAvailable(hRequest, &dwSize);
+								if (dwSize > 0)
+								{
+									std::vector<char> buffer(dwSize + 1, 0);
+									WinHttpReadData(hRequest, buffer.data(), dwSize, &dwDownloaded);
+									response.append(buffer.data(), dwDownloaded);
+								}
+							} while (dwSize > 0);
+
+							I::CVar->ConsoleColorPrintf({ 150, 200, 255, 255 }, "[Sourcebans] Response received (%d bytes)\n", static_cast<int>(response.size()));
+							I::CVar->ConsoleColorPrintf({ 100, 100, 100, 255 }, "[Sourcebans] Raw: %s\n", response.substr(0, 500).c_str());
+
+							// Initialize all as fetched with no bans
+							std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+							for (uint64_t id : steamIDs)
+							{
+								g_mapSourcebans[id].m_bFetched = true;
+								g_mapSourcebans[id].m_bFetching = false;
+							}
+
+							// Parse JSON response (with shouldkey=1, response is keyed by SteamID)
+							try
+							{
+								auto json = nlohmann::json::parse(response);
+								if (json.contains("response"))
+								{
+									const auto& resp = json["response"];
+									
+									// If it's an object (keyed by SteamID)
+									if (resp.is_object())
+									{
+										for (auto& [steamIdStr, bans] : resp.items())
+										{
+											uint64_t steamId = std::stoull(steamIdStr);
+											
+											if (bans.is_array())
+											{
+												for (const auto& ban : bans)
+												{
+													g_mapSourcebans[steamId].m_bHasBans = true;
+													std::string banStr;
+													
+													std::string server = "Unknown";
+													std::string reason = "No reason";
+													std::string state = "Unknown";
+													
+													if (ban.contains("Server") && !ban["Server"].is_null())
+														server = ban["Server"].get<std::string>();
+													if (ban.contains("BanReason") && !ban["BanReason"].is_null())
+														reason = ban["BanReason"].get<std::string>();
+													if (ban.contains("CurrentState") && !ban["CurrentState"].is_null())
+														state = ban["CurrentState"].get<std::string>();
+
+													banStr = server + ": " + reason + " (" + state + ")";
+													g_mapSourcebans[steamId].m_vecBans.push_back(banStr);
+
+													I::CVar->ConsoleColorPrintf({ 255, 100, 100, 255 }, "[Sourcebans] BAN FOUND: %llu - %s\n", steamId, banStr.c_str());
+												}
+											}
+										}
+									}
+									// If it's an array (old format without shouldkey)
+									else if (resp.is_array())
+									{
+										for (const auto& ban : resp)
+										{
+											if (ban.contains("SteamID") && !ban["SteamID"].is_null())
+											{
+												uint64_t steamId = std::stoull(ban["SteamID"].get<std::string>());
+												g_mapSourcebans[steamId].m_bHasBans = true;
+												
+												std::string banStr;
+												std::string server = "Unknown";
+												std::string reason = "No reason";
+												std::string state = "Unknown";
+												
+												if (ban.contains("Server") && !ban["Server"].is_null())
+													server = ban["Server"].get<std::string>();
+												if (ban.contains("BanReason") && !ban["BanReason"].is_null())
+													reason = ban["BanReason"].get<std::string>();
+												if (ban.contains("CurrentState") && !ban["CurrentState"].is_null())
+													state = ban["CurrentState"].get<std::string>();
+
+												banStr = server + ": " + reason + " (" + state + ")";
+												g_mapSourcebans[steamId].m_vecBans.push_back(banStr);
+
+												I::CVar->ConsoleColorPrintf({ 255, 100, 100, 255 }, "[Sourcebans] BAN FOUND: %llu - %s\n", steamId, banStr.c_str());
+											}
+										}
+									}
+								}
+
+								int nBannedCount = 0;
+								for (uint64_t id : steamIDs)
+								{
+									if (g_mapSourcebans[id].m_bHasBans)
+										nBannedCount++;
+								}
+								I::CVar->ConsoleColorPrintf({ 150, 255, 150, 255 }, "[Sourcebans] Check complete: %d/%d players have bans\n", nBannedCount, static_cast<int>(steamIDs.size()));
+
+								// Queue chat alerts for players with bans (will be processed on main thread)
+								if (CFG::Visuals_Chat_Ban_Alerts)
+								{
+									for (uint64_t id : steamIDs)
+									{
+										if (g_mapSourcebans[id].m_bHasBans && !g_mapSourcebans[id].m_bAlertDismissed)
+										{
+											int banCount = static_cast<int>(g_mapSourcebans[id].m_vecBans.size());
+											
+											// Find player name from entity list
+											std::string playerName = "Unknown";
+											for (int n = 1; n <= I::EngineClient->GetMaxClients(); n++)
+											{
+												player_info_t pi{};
+												if (I::EngineClient->GetPlayerInfo(n, &pi) && !pi.fakeplayer)
+												{
+													uint64_t playerSteamID = static_cast<uint64_t>(pi.friendsID) + 0x0110000100000000ULL;
+													if (playerSteamID == id)
+													{
+														playerName = pi.name;
+														break;
+													}
+												}
+											}
+											
+											// Queue alert for main thread
+											{
+												std::lock_guard<std::mutex> alertLock(g_mtxPendingAlerts);
+												g_vecPendingBanAlerts.push_back({ playerName, banCount });
+											}
+										}
+									}
+								}
+							}
+							catch (const std::exception& e)
+							{
+								I::CVar->ConsoleColorPrintf({ 255, 100, 100, 255 }, "[Sourcebans] JSON parse error: %s\n", e.what());
+							}
+						}
+					}
+					else
+					{
+						I::CVar->ConsoleColorPrintf({ 255, 100, 100, 255 }, "[Sourcebans] Failed to send request\n");
+					}
+					WinHttpCloseHandle(hRequest);
+				}
+				WinHttpCloseHandle(hConnect);
+			}
+			WinHttpCloseHandle(hSession);
+		}
+		else
+		{
+			I::CVar->ConsoleColorPrintf({ 255, 100, 100, 255 }, "[Sourcebans] Failed to open HTTP session\n");
+		}
+	}).detach();
+}
+
+// Single player fetch (for manual refresh)
+static void FetchSourcebans(uint64_t steamID64)
+{
+	FetchSourcebansBatch({ steamID64 });
+}
+
+// Check all players in the server (checks new players automatically)
+static void CheckAllPlayersSourcebans()
+{
+	if (!I::EngineClient->IsConnected())
+	{
+		// Reset when disconnected so we check again on next connect
+		if (g_bWasConnected)
+		{
+			g_bWasConnected = false;
+			std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+			g_setCheckedPlayers.clear();
+			// Don't clear g_mapSourcebans - keep the cache for players we've seen before
+			
+			// Clear current session for player stats
+			F::Players->ClearCurrentSession();
+		}
+		return;
+	}
+
+	g_bWasConnected = true;
+
+	std::vector<uint64_t> steamIDsToCheck;
+
+	for (int n = 1; n < I::EngineClient->GetMaxClients() + 1; n++)
+	{
+		if (n == I::EngineClient->GetLocalPlayer())
+			continue;
+
+		player_info_t player_info{};
+		if (!I::EngineClient->GetPlayerInfo(n, &player_info) || player_info.fakeplayer)
+			continue;
+
+		if (player_info.friendsID == 0)
+			continue;
+
+		uint64_t steamID64 = static_cast<uint64_t>(player_info.friendsID) + 0x0110000100000000ULL;
+
+		// Skip if already checked or currently checking
+		{
+			std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+			if (g_setCheckedPlayers.count(steamID64) > 0)
+				continue;
+			if (g_mapSourcebans[steamID64].m_bFetched || g_mapSourcebans[steamID64].m_bFetching)
+			{
+				g_setCheckedPlayers.insert(steamID64); // Mark as checked if already in cache
+				continue;
+			}
+			g_setCheckedPlayers.insert(steamID64);
+		}
+
+		// Record encounter for this player (first time seeing them this session)
+		F::Players->RecordEncounter(steamID64);
+
+		steamIDsToCheck.push_back(steamID64);
+	}
+
+	if (!steamIDsToCheck.empty())
+	{
+		FetchSourcebansBatch(steamIDsToCheck);
+	}
+}
+
+// Helper to check if a player has sourcebans alert (not dismissed)
+static bool HasSourcebansAlert(uint64_t steamID64)
+{
+	std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+	auto it = g_mapSourcebans.find(steamID64);
+	if (it != g_mapSourcebans.end())
+		return it->second.m_bHasBans && !it->second.m_bAlertDismissed;
+	return false;
+}
+
 #define multiselect(label, unique, ...) static std::vector<std::pair<const char *, bool &>> unique##multiselect = __VA_ARGS__; \
 SelectMulti(label, unique##multiselect)
 
@@ -1244,8 +1599,9 @@ void CMenu::MainWindow()
 	m_nCursorX = CFG::Menu_Pos_X + CFG::Menu_Spacing_X;
 	m_nCursorY = CFG::Menu_Pos_Y + CFG::Menu_Drag_Bar_Height + CFG::Menu_Spacing_Y;
 
-	enum class EMainTabs { AIM, VISUALS, EXPLOITS, MISC, PLAYERS, CONFIGS };
+	enum class EMainTabs { AIM, VISUALS, EXPLOITS, MISC, PLAYERS, CONFIGS, PLAYER_DETAILS };
 	static EMainTabs MainTab = EMainTabs::AIM;
+	static int nSelectedPlayerIndex = -1; // For player details view
 	
 	// Enhanced tab box with detailed pixel art icons
 	auto DrawTabBox = [&](const char* label, int type, bool active) -> bool {
@@ -2406,7 +2762,9 @@ void CMenu::MainWindow()
 					{ "Bones", CFG::ESP_Players_Bones },
 					{ "Arrows", CFG::ESP_Players_Arrows },
 					{ "Conds", CFG::ESP_Players_Conds },
-					{ "Sniper Lines", CFG::ESP_Players_Sniper_Lines }
+					{ "Sniper Lines", CFG::ESP_Players_Sniper_Lines },
+					{ "F2P Tag", CFG::ESP_Players_Show_F2P },
+					{ "Party Tag", CFG::ESP_Players_Show_Party }
 					});
 
 				CheckBox("Show Team Medics", CFG::ESP_Players_Show_Teammate_Medics);
@@ -2795,6 +3153,7 @@ void CMenu::MainWindow()
 				CheckBox("Enemy Votes", CFG::Visuals_Chat_Enemy_Votes);
 				CheckBox("Player List Info", CFG::Visuals_Chat_Player_List_Info);
 				CheckBox("Name Tags", CFG::Visuals_Chat_Name_Tags);
+				CheckBox("Ban Alerts", CFG::Visuals_Chat_Ban_Alerts);
 			}
 			GroupBoxEnd();
 
@@ -3042,6 +3401,7 @@ void CMenu::MainWindow()
 				ColorPicker("Invulnerable", CFG::Color_Invulnerable);
 				ColorPicker("Cheater", CFG::Color_Cheater);
 				ColorPicker("Retard Legit", CFG::Color_RetardLegit);
+				ColorPicker("F2P", CFG::Color_F2P);
 				ColorPicker("Invisible", CFG::Color_Invisible);
 				ColorPicker("Over Heal", CFG::Color_OverHeal);
 				ColorPicker("Uber", CFG::Color_Uber);
@@ -3058,6 +3418,26 @@ void CMenu::MainWindow()
 				ColorPicker("Movement Sim", CFG::Color_Simulation_Movement);
 				ColorPicker("Projectile Sim", CFG::Color_Simulation_Projectile);
 				ColorPicker("Trajectory", CFG::Color_Trajectory);
+			}
+			GroupBoxEnd();
+
+			m_nCursorX += m_nLastGroupBoxW + (CFG::Menu_Spacing_X * 2);
+			m_nCursorY = anchor_y;
+
+			GroupBoxStart("Party Colors", 150);
+			{
+				ColorPicker("Party 1 (Local)", CFG::Color_Party_1);
+				ColorPicker("Party 2", CFG::Color_Party_2);
+				ColorPicker("Party 3", CFG::Color_Party_3);
+				ColorPicker("Party 4", CFG::Color_Party_4);
+				ColorPicker("Party 5", CFG::Color_Party_5);
+				ColorPicker("Party 6", CFG::Color_Party_6);
+				ColorPicker("Party 7", CFG::Color_Party_7);
+				ColorPicker("Party 8", CFG::Color_Party_8);
+				ColorPicker("Party 9", CFG::Color_Party_9);
+				ColorPicker("Party 10", CFG::Color_Party_10);
+				ColorPicker("Party 11", CFG::Color_Party_11);
+				ColorPicker("Party 12", CFG::Color_Party_12);
 			}
 			GroupBoxEnd();
 		}
@@ -3378,51 +3758,180 @@ void CMenu::MainWindow()
 	{
 		m_nCursorX += CFG::Menu_Spacing_X;
 
+		// Helper function to get party color
+		auto GetPartyColor = [](int nPartyIndex) -> Color_t
+		{
+			switch (nPartyIndex)
+			{
+			case 1: return CFG::Color_Party_1;
+			case 2: return CFG::Color_Party_2;
+			case 3: return CFG::Color_Party_3;
+			case 4: return CFG::Color_Party_4;
+			case 5: return CFG::Color_Party_5;
+			case 6: return CFG::Color_Party_6;
+			case 7: return CFG::Color_Party_7;
+			case 8: return CFG::Color_Party_8;
+			case 9: return CFG::Color_Party_9;
+			case 10: return CFG::Color_Party_10;
+			case 11: return CFG::Color_Party_11;
+			case 12: return CFG::Color_Party_12;
+			default: return CFG::Menu_Text_Inactive;
+			}
+		};
+
 		if (I::EngineClient->IsConnected())
 		{
+			const bool bShowAvatars = I::SteamFriends && I::SteamUtils;
+			const int nAvatarSize = 24;
+			const int nRowHeight = nAvatarSize + CFG::Menu_Spacing_Y;
+			const int nPlayersPerPage = 20;
+
+			// Collect all valid players first
+			static std::vector<int> vecPlayerIndices;
+			vecPlayerIndices.clear();
+
 			for (auto n{ 1 }; n < I::EngineClient->GetMaxClients() + 1; n++)
 			{
 				if (n == I::EngineClient->GetLocalPlayer())
-				{
 					continue;
-				}
 
 				player_info_t player_info{};
-
 				if (!I::EngineClient->GetPlayerInfo(n, &player_info) || player_info.fakeplayer)
-				{
 					continue;
+
+				vecPlayerIndices.push_back(n);
+			}
+
+			const int nTotalPlayers = static_cast<int>(vecPlayerIndices.size());
+			const int nTotalPages = (nTotalPlayers + nPlayersPerPage - 1) / nPlayersPerPage;
+
+			// Page selection state
+			static int nCurrentPage = 0;
+
+			// Reset page if out of bounds
+			if (nCurrentPage >= nTotalPages)
+				nCurrentPage = 0;
+
+			// Draw page buttons if more than one page
+			if (nTotalPages > 1)
+			{
+				auto bx = m_nCursorX;
+				auto by = m_nCursorY;
+
+				for (int nPage = 0; nPage < nTotalPages; nPage++)
+				{
+					char szPageLabel[16];
+					snprintf(szPageLabel, sizeof(szPageLabel), "%d", nPage + 1);
+
+					bool bIsCurrentPage = (nPage == nCurrentPage);
+					if (Button(szPageLabel, bIsCurrentPage, 25))
+					{
+						nCurrentPage = nPage;
+					}
+
+					m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
+					m_nCursorY = by;
 				}
 
-				PlayerPriority custom_info{};
+				m_nCursorX = bx;
+				m_nCursorY = by + H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y * 2;
+			}
 
+			// Calculate range for current page
+			const int nStartIdx = nCurrentPage * nPlayersPerPage;
+			const int nEndIdx = std::min(nStartIdx + nPlayersPerPage, nTotalPlayers);
+
+			// Get local player team for comparison
+			auto pResource = GetTFPlayerResource();
+			const int nLocalTeam = pResource ? pResource->GetTeam(I::EngineClient->GetLocalPlayer()) : 0;
+
+			// Render players for current page
+			for (int i = nStartIdx; i < nEndIdx; i++)
+			{
+				int n = vecPlayerIndices[i];
+
+				player_info_t player_info{};
+				if (!I::EngineClient->GetPlayerInfo(n, &player_info))
+					continue;
+
+				PlayerPriority custom_info{};
 				F::Players->GetInfo(n, custom_info);
+
+				// Get F2P and party info
+				bool bIsF2P = H::Entities->IsF2P(n);
+				int nPartyIndex = H::Entities->GetPartyIndex(n);
 
 				auto bx{ m_nCursorX };
 				auto by{ m_nCursorY };
 
+				// Draw avatar
+				if (bShowAvatars && player_info.friendsID != 0)
+				{
+					H::Draw->Avatar(m_nCursorX, m_nCursorY, nAvatarSize, nAvatarSize, static_cast<uint32_t>(player_info.friendsID));
+				}
+
+				// Move cursor right for name (after avatar)
+				m_nCursorX += nAvatarSize + CFG::Menu_Spacing_X;
+				m_nCursorY = by + (nAvatarSize - H::Fonts->Get(EFonts::Menu).m_nTall - CFG::Menu_Spacing_Y) / 2;
+
+				// Determine name color based on priority first, then team
+				Color_t nameColor = CFG::Menu_Text_Inactive;
 				if (custom_info.Ignored)
-				{
-					playerListButton(Utils::ConvertUtf8ToWide(player_info.name).c_str(), 150, CFG::Color_Friend, false);
-				}
-
+					nameColor = CFG::Color_Friend;
 				else if (custom_info.Cheater)
-				{
-					playerListButton(Utils::ConvertUtf8ToWide(player_info.name).c_str(), 150, CFG::Color_Cheater, false);
-				}
-
+					nameColor = CFG::Color_Cheater;
 				else if (custom_info.RetardLegit)
+					nameColor = CFG::Color_RetardLegit;
+				else if (pResource)
 				{
-					playerListButton(Utils::ConvertUtf8ToWide(player_info.name).c_str(), 150, CFG::Color_RetardLegit, false);
+					// Use team color if no priority set
+					int nPlayerTeam = pResource->GetTeam(n);
+					if (nPlayerTeam == nLocalTeam)
+						nameColor = CFG::Color_Teammate;
+					else
+						nameColor = CFG::Color_Enemy;
 				}
 
-				else
+				// Click on name to view player details
+				if (playerListButton(Utils::ConvertUtf8ToWide(player_info.name).c_str(), 150, nameColor, false))
 				{
-					playerListButton(Utils::ConvertUtf8ToWide(player_info.name).c_str(), 150, CFG::Menu_Text_Inactive, false);
+					nSelectedPlayerIndex = n;
+					MainTab = EMainTabs::PLAYER_DETAILS;
+					// Dismiss sourcebans alert when viewing profile
+					uint64_t steamID64 = static_cast<uint64_t>(player_info.friendsID) + 0x0110000100000000ULL;
+					DismissSourcebansAlert(steamID64);
 				}
 
 				m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
-				m_nCursorY = by;
+				m_nCursorY = by + (nAvatarSize - H::Fonts->Get(EFonts::Menu).m_nTall - CFG::Menu_Spacing_Y) / 2;
+
+				// F2P indicator
+				if (bIsF2P)
+				{
+					playerListButton(L"F2P", 30, CFG::Color_F2P, true);
+				}
+				else
+				{
+					playerListButton(L"-", 30, CFG::Menu_Text_Disabled, true);
+				}
+
+				m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
+				m_nCursorY = by + (nAvatarSize - H::Fonts->Get(EFonts::Menu).m_nTall - CFG::Menu_Spacing_Y) / 2;
+
+				// Party indicator with color
+				if (nPartyIndex > 0)
+				{
+					wchar_t partyLabel[8];
+					swprintf_s(partyLabel, L"P%d", nPartyIndex);
+					playerListButton(partyLabel, 30, GetPartyColor(nPartyIndex), true);
+				}
+				else
+				{
+					playerListButton(L"-", 30, CFG::Menu_Text_Disabled, true);
+				}
+
+				m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
+				m_nCursorY = by + (nAvatarSize - H::Fonts->Get(EFonts::Menu).m_nTall - CFG::Menu_Spacing_Y) / 2;
 
 				if (playerListButton(L"ignored", 60, custom_info.Ignored ? CFG::Color_Friend : CFG::Menu_Text_Inactive, true))
 				{
@@ -3430,7 +3939,7 @@ void CMenu::MainWindow()
 				}
 
 				m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
-				m_nCursorY = by;
+				m_nCursorY = by + (nAvatarSize - H::Fonts->Get(EFonts::Menu).m_nTall - CFG::Menu_Spacing_Y) / 2;
 
 				if (playerListButton(L"cheater", 60, custom_info.Cheater ? CFG::Color_Cheater : CFG::Menu_Text_Inactive, true))
 				{
@@ -3438,17 +3947,45 @@ void CMenu::MainWindow()
 				}
 
 				m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
-				m_nCursorY = by;
+				m_nCursorY = by + (nAvatarSize - H::Fonts->Get(EFonts::Menu).m_nTall - CFG::Menu_Spacing_Y) / 2;
 
 				if (playerListButton(L"retard legit", 60, custom_info.RetardLegit ? CFG::Color_RetardLegit : CFG::Menu_Text_Inactive, true))
 				{
 					F::Players->Mark(n, { false, false, !custom_info.RetardLegit });
 				}
 
+				// Check for sourcebans alert
+				uint64_t steamID64 = static_cast<uint64_t>(player_info.friendsID) + 0x0110000100000000ULL;
+				if (HasSourcebansAlert(steamID64))
+				{
+					m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
+					m_nCursorY = by + (nAvatarSize - H::Fonts->Get(EFonts::Menu).m_nTall - CFG::Menu_Spacing_Y) / 2;
+
+					// Draw ALERT box with red background (clickable)
+					int alertW = 45;
+					int alertH = H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y - 1;
+					
+					bool bAlertHovered = IsHovered(m_nCursorX, m_nCursorY, alertW, alertH, nullptr);
+					Color_t alertBg = bAlertHovered ? Color_t{ 220, 60, 60, 255 } : Color_t{ 180, 40, 40, 255 };
+					
+					H::Draw->Rect(m_nCursorX, m_nCursorY, alertW, alertH, alertBg);
+					H::Draw->OutlinedRect(m_nCursorX, m_nCursorY, alertW, alertH, { 255, 80, 80, 255 });
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + alertW / 2, m_nCursorY + alertH / 2 - 1, { 255, 255, 255, 255 }, POS_CENTERXY, "ALERT!");
+					
+					// Click on ALERT to view player details and dismiss alert
+					if (bAlertHovered && H::Input->IsPressed(VK_LBUTTON) && !m_bClickConsumed)
+					{
+						m_bClickConsumed = true;
+						nSelectedPlayerIndex = n;
+						MainTab = EMainTabs::PLAYER_DETAILS;
+						DismissSourcebansAlert(steamID64);
+					}
+				}
+
 				m_nCursorX = bx;
 				m_nCursorY = by;
 
-				m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + (CFG::Menu_Spacing_Y + 1);
+				m_nCursorY += nRowHeight;
 			}
 		}
 	}
@@ -3677,6 +4214,375 @@ void CMenu::MainWindow()
 		m_nCursorX = savedX;
 		m_nCursorY = savedY;
 	}
+
+	// Player Details View
+	if (MainTab == EMainTabs::PLAYER_DETAILS)
+	{
+		// Back button
+		if (Button("< Back to Players", false, 120))
+		{
+			MainTab = EMainTabs::PLAYERS;
+			nSelectedPlayerIndex = -1;
+		}
+
+		m_nCursorY += CFG::Menu_Spacing_Y * 2;
+
+		// Check if player is still valid
+		player_info_t player_info{};
+		if (nSelectedPlayerIndex <= 0 || !I::EngineClient->GetPlayerInfo(nSelectedPlayerIndex, &player_info))
+		{
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, "Player no longer available");
+			return;
+		}
+
+		auto pResource = GetTFPlayerResource();
+		PlayerPriority custom_info{};
+		F::Players->GetInfo(nSelectedPlayerIndex, custom_info);
+
+		const int nLocalTeam = pResource ? pResource->GetTeam(I::EngineClient->GetLocalPlayer()) : 0;
+		const int nPlayerTeam = pResource ? pResource->GetTeam(nSelectedPlayerIndex) : 0;
+		const bool bIsTeammate = (nPlayerTeam == nLocalTeam);
+		const bool bIsF2P = H::Entities->IsF2P(nSelectedPlayerIndex);
+		const int nPartyIndex = H::Entities->GetPartyIndex(nSelectedPlayerIndex);
+
+		// Large avatar at top
+		const int nLargeAvatarSize = 64;
+		const bool bShowAvatars = I::SteamFriends && I::SteamUtils;
+		
+		int nAvatarX = m_nCursorX;
+		int nAvatarY = m_nCursorY;
+
+		if (bShowAvatars && player_info.friendsID != 0)
+		{
+			H::Draw->Avatar(nAvatarX, nAvatarY, nLargeAvatarSize, nLargeAvatarSize, static_cast<uint32_t>(player_info.friendsID));
+		}
+		else
+		{
+			// Placeholder box if no avatar
+			H::Draw->OutlinedRect(nAvatarX, nAvatarY, nLargeAvatarSize, nLargeAvatarSize, CFG::Menu_Accent_Primary);
+		}
+
+		// Player name next to avatar
+		int nInfoX = nAvatarX + nLargeAvatarSize + CFG::Menu_Spacing_X * 2;
+		int nInfoY = nAvatarY;
+
+		// Name with team color
+		Color_t nameColor = bIsTeammate ? CFG::Color_Teammate : CFG::Color_Enemy;
+		if (custom_info.Cheater)
+			nameColor = CFG::Color_Cheater;
+		else if (custom_info.Ignored)
+			nameColor = CFG::Color_Friend;
+		else if (custom_info.RetardLegit)
+			nameColor = CFG::Color_RetardLegit;
+
+		H::Draw->String(H::Fonts->Get(EFonts::Menu), nInfoX, nInfoY, nameColor, POS_DEFAULT, "%s", player_info.name);
+		nInfoY += H::Fonts->Get(EFonts::Menu).m_nTall + 2;
+
+		// Steam ID (convert friendsID to Steam64)
+		uint64_t steamID64 = static_cast<uint64_t>(player_info.friendsID) + 0x0110000100000000ULL;
+		H::Draw->String(H::Fonts->Get(EFonts::Menu), nInfoX, nInfoY, CFG::Menu_Text_Inactive, POS_DEFAULT, "Steam ID: %llu", steamID64);
+		nInfoY += H::Fonts->Get(EFonts::Menu).m_nTall + 2;
+
+		// Team
+		const char* szTeam = "Unknown";
+		if (nPlayerTeam == TF_TEAM_RED)
+			szTeam = "RED";
+		else if (nPlayerTeam == TF_TEAM_BLUE)
+			szTeam = "BLU";
+		else if (nPlayerTeam == TEAM_SPECTATOR)
+			szTeam = "Spectator";
+
+		H::Draw->String(H::Fonts->Get(EFonts::Menu), nInfoX, nInfoY, CFG::Menu_Text_Inactive, POS_DEFAULT, "Team: %s", szTeam);
+
+		// Move cursor below avatar section
+		m_nCursorY = nAvatarY + nLargeAvatarSize + CFG::Menu_Spacing_Y * 2;
+
+		// Info section with GroupBox
+		GroupBoxStart("Player Info", 280);
+		{
+			m_nCursorY += CFG::Menu_Spacing_Y;
+
+			// F2P Status
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "F2P Status:");
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, bIsF2P ? CFG::Color_F2P : CFG::Menu_Text_Inactive, POS_DEFAULT, bIsF2P ? "Yes" : "No");
+			m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+			// Party Status
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Party:");
+			if (nPartyIndex > 0)
+			{
+				char szParty[16];
+				snprintf(szParty, sizeof(szParty), "Party %d", nPartyIndex);
+				Color_t partyColor;
+				switch (nPartyIndex)
+				{
+				case 1: partyColor = CFG::Color_Party_1; break;
+				case 2: partyColor = CFG::Color_Party_2; break;
+				case 3: partyColor = CFG::Color_Party_3; break;
+				case 4: partyColor = CFG::Color_Party_4; break;
+				case 5: partyColor = CFG::Color_Party_5; break;
+				case 6: partyColor = CFG::Color_Party_6; break;
+				case 7: partyColor = CFG::Color_Party_7; break;
+				case 8: partyColor = CFG::Color_Party_8; break;
+				case 9: partyColor = CFG::Color_Party_9; break;
+				case 10: partyColor = CFG::Color_Party_10; break;
+				case 11: partyColor = CFG::Color_Party_11; break;
+				case 12: partyColor = CFG::Color_Party_12; break;
+				default: partyColor = CFG::Menu_Text_Inactive; break;
+				}
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, partyColor, POS_DEFAULT, szParty);
+			}
+			else
+			{
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, "None");
+			}
+			m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+			// Relationship
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Relation:");
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, bIsTeammate ? CFG::Color_Teammate : CFG::Color_Enemy, POS_DEFAULT, bIsTeammate ? "Teammate" : "Enemy");
+			m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+			// Player class (if available)
+			auto pEntity = I::ClientEntityList->GetClientEntity(nSelectedPlayerIndex);
+			if (pEntity && pEntity->GetClassId() == ETFClassIds::CTFPlayer)
+			{
+				auto pPlayer = pEntity->As<C_TFPlayer>();
+				if (pPlayer && !pPlayer->deadflag())
+				{
+					const char* szClass = "Unknown";
+					switch (pPlayer->m_iClass())
+					{
+					case TF_CLASS_SCOUT: szClass = "Scout"; break;
+					case TF_CLASS_SOLDIER: szClass = "Soldier"; break;
+					case TF_CLASS_PYRO: szClass = "Pyro"; break;
+					case TF_CLASS_DEMOMAN: szClass = "Demoman"; break;
+					case TF_CLASS_HEAVYWEAPONS: szClass = "Heavy"; break;
+					case TF_CLASS_ENGINEER: szClass = "Engineer"; break;
+					case TF_CLASS_MEDIC: szClass = "Medic"; break;
+					case TF_CLASS_SNIPER: szClass = "Sniper"; break;
+					case TF_CLASS_SPY: szClass = "Spy"; break;
+					}
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Class:");
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, szClass);
+					m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+					// Health
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Health:");
+					char szHealth[32];
+					snprintf(szHealth, sizeof(szHealth), "%d / %d", pPlayer->m_iHealth(), pPlayer->GetMaxHealth());
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, szHealth);
+					m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+				}
+				else
+				{
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Status:");
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Color_Cheater, POS_DEFAULT, "Dead");
+					m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+				}
+			}
+		}
+		GroupBoxEnd();
+
+		// Your History with this player
+		m_nCursorY += CFG::Menu_Spacing_Y;
+		GroupBoxStart("Your History", 280);
+		{
+			m_nCursorY += CFG::Menu_Spacing_Y;
+
+			PlayerStats playerStats{};
+			F::Players->GetStats(steamID64, playerStats);
+
+			// Encounters
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Encounters:");
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, "%d", playerStats.Encounters);
+			m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+			// Kills (you killed them)
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "You killed:");
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Color_Friend, POS_DEFAULT, "%d", playerStats.Kills);
+			m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+			// Deaths (they killed you)
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Killed you:");
+			H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Color_Cheater, POS_DEFAULT, "%d", playerStats.Deaths);
+			m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+			// K/D ratio
+			if (playerStats.Deaths > 0)
+			{
+				float kd = static_cast<float>(playerStats.Kills) / static_cast<float>(playerStats.Deaths);
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "K/D Ratio:");
+				Color_t kdColor = kd >= 1.0f ? CFG::Color_Friend : CFG::Color_Cheater;
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, kdColor, POS_DEFAULT, "%.2f", kd);
+				m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+			}
+
+			auto FormatTimeAgo = [](int64_t timestamp) -> std::string
+			{
+				if (timestamp <= 0)
+					return "Never";
+				
+				auto now = std::chrono::duration_cast<std::chrono::seconds>(
+					std::chrono::system_clock::now().time_since_epoch()).count();
+				int64_t diff = now - timestamp;
+				
+				if (diff < 60)
+					return "Just now";
+				else if (diff < 3600)
+					return std::to_string(diff / 60) + " min ago";
+				else if (diff < 86400)
+					return std::to_string(diff / 3600) + " hours ago";
+				else
+					return std::to_string(diff / 86400) + " days ago";
+			};
+
+			// First seen
+			if (playerStats.FirstSeen > 0)
+			{
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "First seen:");
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, FormatTimeAgo(playerStats.FirstSeen).c_str());
+				m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+			}
+
+			// Last seen (shows when you previously saw them - updated after each encounter)
+			if (playerStats.LastSeen > 0 && playerStats.Encounters > 1)
+			{
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text, POS_DEFAULT, "Last seen:");
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX + 120, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, FormatTimeAgo(playerStats.LastSeen).c_str());
+				m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+			}
+		}
+		GroupBoxEnd();
+
+		// Priority/Tags section
+		m_nCursorY += CFG::Menu_Spacing_Y;
+		GroupBoxStart("Player Tags", 280);
+		{
+			m_nCursorY += CFG::Menu_Spacing_Y;
+
+			// Radio-style tags - only one can be active at a time
+			// Ignored toggle
+			if (CheckBox("Ignored", custom_info.Ignored))
+			{
+				if (!custom_info.Ignored)
+					F::Players->Mark(nSelectedPlayerIndex, { true, false, false }); // Set Ignored, clear others
+				else
+					F::Players->Mark(nSelectedPlayerIndex, { false, false, false }); // Clear all
+			}
+
+			// Cheater toggle
+			if (CheckBox("Cheater", custom_info.Cheater))
+			{
+				if (!custom_info.Cheater)
+					F::Players->Mark(nSelectedPlayerIndex, { false, true, false }); // Set Cheater, clear others
+				else
+					F::Players->Mark(nSelectedPlayerIndex, { false, false, false }); // Clear all
+			}
+
+			// Retard Legit toggle
+			if (CheckBox("Retard Legit", custom_info.RetardLegit))
+			{
+				if (!custom_info.RetardLegit)
+					F::Players->Mark(nSelectedPlayerIndex, { false, false, true }); // Set RetardLegit, clear others
+				else
+					F::Players->Mark(nSelectedPlayerIndex, { false, false, false }); // Clear all
+			}
+		}
+		GroupBoxEnd();
+
+		// Actions section
+		m_nCursorY += CFG::Menu_Spacing_Y;
+		GroupBoxStart("Actions", 280);
+		{
+			m_nCursorY += CFG::Menu_Spacing_Y;
+
+			// Open Steam Profile button
+			if (Button("Open Steam Profile", false, 150))
+			{
+				uint64_t steamID64 = static_cast<uint64_t>(player_info.friendsID) + 0x0110000100000000ULL;
+				wchar_t szUrl[128];
+				swprintf_s(szUrl, L"https://steamcommunity.com/profiles/%llu", steamID64);
+				ShellExecuteW(NULL, L"open", szUrl, NULL, NULL, SW_SHOWNORMAL);
+			}
+		}
+		GroupBoxEnd();
+
+		// Sourcebans History section
+		m_nCursorY += CFG::Menu_Spacing_Y;
+		GroupBoxStart("Sourcebans History", 450);
+		{
+			m_nCursorY += CFG::Menu_Spacing_Y;
+
+			uint64_t steamID64 = static_cast<uint64_t>(player_info.friendsID) + 0x0110000100000000ULL;
+
+			// Check if we need to fetch data
+			SourcebanInfo_t sourcebanInfo;
+			{
+				std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+				auto it = g_mapSourcebans.find(steamID64);
+				if (it != g_mapSourcebans.end())
+					sourcebanInfo = it->second;
+			}
+
+			if (!sourcebanInfo.m_bFetched && !sourcebanInfo.m_bFetching)
+			{
+				// Show fetch button
+				if (Button("Check Sourcebans", false, 130))
+				{
+					FetchSourcebans(steamID64);
+				}
+			}
+			else if (sourcebanInfo.m_bFetching)
+			{
+				H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, "Fetching...");
+				m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+			}
+			else if (sourcebanInfo.m_bFetched)
+			{
+				if (sourcebanInfo.m_bHasBans)
+				{
+					// Show warning
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Color_Cheater, POS_DEFAULT, "WARNING: %d ban(s) found!", static_cast<int>(sourcebanInfo.m_vecBans.size()));
+					m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+
+					// Show each ban (limit to 10 to show more)
+					int nBansShown = 0;
+					for (const auto& ban : sourcebanInfo.m_vecBans)
+					{
+						if (nBansShown >= 10)
+						{
+							H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, "... and %d more", static_cast<int>(sourcebanInfo.m_vecBans.size()) - 10);
+							m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+							break;
+						}
+
+						// Show more text - truncate at 70 chars instead of 40
+						std::string displayBan = ban;
+						if (displayBan.length() > 70)
+							displayBan = displayBan.substr(0, 67) + "...";
+
+						H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Menu_Text_Inactive, POS_DEFAULT, displayBan.c_str());
+						m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+						nBansShown++;
+					}
+				}
+				else
+				{
+					H::Draw->String(H::Fonts->Get(EFonts::Menu), m_nCursorX, m_nCursorY, CFG::Color_Friend, POS_DEFAULT, "No sourcebans found");
+					m_nCursorY += H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y;
+				}
+
+				// Refresh button
+				if (Button("Refresh", false, 70))
+				{
+					std::lock_guard<std::mutex> lock(g_mtxSourcebans);
+					g_mapSourcebans.erase(steamID64);
+				}
+			}
+		}
+		GroupBoxEnd();
+	}
 }
 
 void CMenu::Snow()
@@ -3773,6 +4679,9 @@ void CMenu::Indicators()
 
 void CMenu::Run()
 {
+	// Auto-check all players' sourcebans when connected (runs every frame but only checks new players)
+	CheckAllPlayersSourcebans();
+
 	if (CFG::Misc_Clean_Screenshot && I::EngineClient->IsTakingScreenshot())
 	{
 		return;

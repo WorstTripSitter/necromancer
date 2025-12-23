@@ -537,6 +537,7 @@
     <ClInclude Include="src\App\Features\Triggerbot\AutoSapper\AutoSapper.h" />
     <ClInclude Include="src\App\Features\VisualUtils\Icons.h" />
     <ClInclude Include="src\App\Features\Weather\Weather.h" />
+    <ClInclude Include="src\SDK\TF2\CTFGCClientSystem.h" />
     <ClInclude Include="src\SDK\TF2\iviewrender.h" />
     <ClInclude Include="src\SDK\TF2\renderutils.h" />
     <ClInclude Include="src\Utils\Storage\Storage.h" />

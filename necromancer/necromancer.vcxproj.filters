@@ -365,5 +365,6 @@
     <ClInclude Include="src\App\Features\FakeLagFix\FakeLagFix.h" />
     <ClInclude Include="src\App\Features\Triggerbot\AutoSapper\AutoSapper.h" />
     <ClInclude Include="src\App\Features\Weather\Weather.h" />
+    <ClInclude Include="src\SDK\TF2\CTFGCClientSystem.h" />
   </ItemGroup>
 </Project>

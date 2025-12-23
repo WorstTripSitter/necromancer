@@ -234,6 +234,8 @@ namespace CFG
 	CFGVAR(ESP_Players_Arrows, true);
 	CFGVAR(ESP_Players_Conds, true);
 	CFGVAR(ESP_Players_Sniper_Lines, true);
+	CFGVAR(ESP_Players_Show_F2P, false); // Show F2P tag on players
+	CFGVAR(ESP_Players_Show_Party, false); // Show party indicator on players
 
 	CFGVAR(ESP_Buildings_Active, true);
 	CFGVAR(ESP_Buildings_Alpha, 0.7f);
@@ -508,6 +510,7 @@ namespace CFG
 	CFGVAR(Visuals_Chat_Enemy_Votes, true);
 	CFGVAR(Visuals_Chat_Player_List_Info, true);
 	CFGVAR(Visuals_Chat_Name_Tags, true);
+	CFGVAR(Visuals_Chat_Ban_Alerts, true);
 
 	CFGVAR(Visuals_Weather, 0); // 0 = Off, 1 = Rain, 2 = Light Rain
 
@@ -629,6 +632,20 @@ namespace CFG
 	CFGVAR(Color_Invisible, Color_t({ 209, 216, 224, 255 }));
 	CFGVAR(Color_Cheater, Color_t({ 248, 253, 8, 255 }));
 	CFGVAR(Color_RetardLegit, Color_t({ 253, 3, 11, 255 }));
+	CFGVAR(Color_F2P, Color_t({ 200, 200, 200, 255 })); // F2P player tag color
+	// Party colors (12 unique colors for different parties)
+	CFGVAR(Color_Party_1, Color_t({ 100, 50, 255, 255 }));   // Purple (local party)
+	CFGVAR(Color_Party_2, Color_t({ 255, 100, 100, 255 }));  // Red
+	CFGVAR(Color_Party_3, Color_t({ 100, 255, 100, 255 }));  // Green
+	CFGVAR(Color_Party_4, Color_t({ 255, 255, 100, 255 }));  // Yellow
+	CFGVAR(Color_Party_5, Color_t({ 100, 255, 255, 255 }));  // Cyan
+	CFGVAR(Color_Party_6, Color_t({ 255, 100, 255, 255 }));  // Magenta
+	CFGVAR(Color_Party_7, Color_t({ 255, 165, 0, 255 }));    // Orange
+	CFGVAR(Color_Party_8, Color_t({ 0, 128, 255, 255 }));    // Blue
+	CFGVAR(Color_Party_9, Color_t({ 128, 255, 0, 255 }));    // Lime
+	CFGVAR(Color_Party_10, Color_t({ 255, 0, 128, 255 }));   // Pink
+	CFGVAR(Color_Party_11, Color_t({ 0, 255, 128, 255 }));   // Teal
+	CFGVAR(Color_Party_12, Color_t({ 128, 0, 255, 255 }));   // Violet
 	CFGVAR(Color_OverHeal, Color_t({ 69, 170, 242, 255 }));
 	CFGVAR(Color_Uber, Color_t({ 224, 86, 253, 255 }));
 	CFGVAR(Color_Conds, Color_t({ 249, 202, 36, 255 }));
@@ -701,7 +718,7 @@ namespace CFG
 
 	// Draggable GroupBox positions (column * 100 + order)
 	// Misc tab
-	CFGVAR(Menu_GroupBox_Misc_Misc, 200);    // Right column, order 0
+	CFGVAR(Menu_GroupBox_Misc_Misc, 200);    // Right column, order; 0
 	CFGVAR(Menu_GroupBox_Misc_Game, 201);    // Right column, order 1
 	CFGVAR(Menu_GroupBox_Misc_MvM, 102);     // Middle column, order 2
 	CFGVAR(Menu_GroupBox_Misc_Chat, 101);    // Middle column, order 1

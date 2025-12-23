@@ -14,13 +14,16 @@
 #include "../Features/Triggerbot/AutoSapper/AutoSapper.h"
 
 MAKE_HOOK(IEngineVGuiInternal_Paint, Memory::GetVFunc(I::EngineVGui, 14), void, __fastcall,
-	void *ecx, int mode)
+	void* ecx, int mode)
 {
 	CALL_ORIGINAL(ecx, mode);
 
 	if (mode & PAINT_UIPANELS)
 	{
 		H::Draw->UpdateW2SMatrix();
+
+		// Process pending ban alerts on main thread
+		ProcessPendingBanAlerts();
 
 		I::MatSystemSurface->StartDrawing();
 		{

@@ -48,6 +48,7 @@ MAKE_HOOK(CGameEventManager_FireEventIntern, Signatures::CGameEventManager_FireE
 	{
 		static constexpr auto vote_cast{ HASH_CT("vote_cast") };
 		static constexpr auto player_hurt{ HASH_CT("player_hurt") };
+		static constexpr auto player_death{ HASH_CT("player_death") };
 		static constexpr auto revive_player_notify{ HASH_CT("revive_player_notify") };
 		static constexpr auto player_connect_client{ HASH_CT("player_connect_client") };
 		
@@ -63,6 +64,57 @@ MAKE_HOOK(CGameEventManager_FireEventIntern, Signatures::CGameEventManager_FireE
 		if (uHash == player_hurt)
 		{
 			F::AutoVaccinator->ProcessPlayerHurt(event);
+		}
+
+		// Track kills and deaths
+		if (uHash == player_death)
+		{
+			const auto pLocal = H::Entities->GetLocal();
+			if (pLocal)
+			{
+				int nLocalIndex = pLocal->entindex();
+				int nAttacker = event->GetInt("attacker");
+				int nVictim = event->GetInt("userid");
+
+				// Convert userids to entity indices
+				for (int i = 1; i <= I::EngineClient->GetMaxClients(); i++)
+				{
+					player_info_t pi{};
+					if (I::EngineClient->GetPlayerInfo(i, &pi))
+					{
+						if (pi.userID == nAttacker && i == nLocalIndex)
+						{
+							// Local player killed someone - find victim
+							for (int j = 1; j <= I::EngineClient->GetMaxClients(); j++)
+							{
+								player_info_t victimInfo{};
+								if (I::EngineClient->GetPlayerInfo(j, &victimInfo) && victimInfo.userID == nVictim && j != nLocalIndex)
+								{
+									uint64_t victimSteamID = static_cast<uint64_t>(victimInfo.friendsID) + 0x0110000100000000ULL;
+									F::Players->RecordKill(victimSteamID);
+									break;
+								}
+							}
+							break;
+						}
+						else if (pi.userID == nVictim && i == nLocalIndex)
+						{
+							// Local player died - find attacker
+							for (int j = 1; j <= I::EngineClient->GetMaxClients(); j++)
+							{
+								player_info_t attackerInfo{};
+								if (I::EngineClient->GetPlayerInfo(j, &attackerInfo) && attackerInfo.userID == nAttacker && j != nLocalIndex)
+								{
+									uint64_t attackerSteamID = static_cast<uint64_t>(attackerInfo.friendsID) + 0x0110000100000000ULL;
+									F::Players->RecordDeath(attackerSteamID);
+									break;
+								}
+							}
+							break;
+						}
+					}
+				}
+			}
 		}
 
 		if (HASH_RT(event->GetName()) == player_connect_client && bClientOnly && CFG::Visuals_Chat_Player_List_Info)

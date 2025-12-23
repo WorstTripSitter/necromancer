@@ -2,6 +2,9 @@
 #include "../../TF2/icliententitylist.h"
 #include "../../TF2/ivmodelinfo.h"
 #include "../../TF2/c_baseentity.h"
+#include "../../TF2/CTFPartyClient.h"
+#include "../../TF2/CTFGCClientSystem.h"
+#include "../../TF2/c_tf_playerresource.h"
 
 C_TFPlayer* CEntityHelper::GetLocal()
 {
@@ -22,6 +25,167 @@ C_TFWeaponBase* CEntityHelper::GetWeapon()
 	return nullptr;
 }
 
+bool CEntityHelper::IsF2P(int nPlayerIndex)
+{
+	if (m_mapPlayerInfo.contains(nPlayerIndex))
+		return m_mapPlayerInfo[nPlayerIndex].bIsF2P;
+	return false;
+}
+
+int CEntityHelper::GetPartyIndex(int nPlayerIndex)
+{
+	if (m_mapPlayerInfo.contains(nPlayerIndex))
+		return m_mapPlayerInfo[nPlayerIndex].nPartyIndex;
+	return 0;
+}
+
+int CEntityHelper::GetPartyCount()
+{
+	return m_nNextPartyIndex - 1;
+}
+
+void CEntityHelper::ClearPlayerInfoCache()
+{
+	m_mapPlayerInfo.clear();
+	m_mapPartyToIndex.clear();
+	m_nNextPartyIndex = 1;
+}
+
+// Update F2P and party info from GC system (called periodically)
+void CEntityHelper::UpdatePlayerInfoFromGC()
+{
+	// Only update once per second to avoid performance issues
+	static float flLastUpdate = 0.0f;
+	if (I::GlobalVars && I::GlobalVars->curtime - flLastUpdate < 1.0f)
+		return;
+	flLastUpdate = I::GlobalVars ? I::GlobalVars->curtime : 0.0f;
+
+	// Clear old data
+	ClearPlayerInfoCache();
+
+	// Check if GC system is available
+	if (!I::TFGCClientSystem)
+		return;
+
+	// Temporary maps for collecting party data
+	std::unordered_map<uint32_t, uint64_t> mapAccountToParty;  // AccountID -> PartyID
+	std::unordered_map<uint32_t, bool> mapAccountToF2P;        // AccountID -> IsF2P
+
+	// Get lobby data (contains F2P status and party info for all players in match)
+	if (auto pLobby = I::TFGCClientSystem->GetLobby())
+	{
+		int nMembers = pLobby->GetNumMembers();
+		for (int i = 0; i < nMembers; i++)
+		{
+			CSteamID steamID;
+			pLobby->GetMember(&steamID, i);
+			uint32_t uAccountID = steamID.GetAccountID();
+			if (!uAccountID)
+				continue;
+
+			ConstTFLobbyPlayer details;
+			pLobby->GetMemberDetails(&details, i);
+			
+			if (auto pProto = details.Proto())
+			{
+				// F2P status: chat_suspension = true means F2P account
+				mapAccountToF2P[uAccountID] = pProto->chat_suspension;
+				
+				// Party ID: players with same original_party_id are in same party
+				mapAccountToParty[uAccountID] = pProto->original_party_id;
+			}
+		}
+	}
+
+	// Also check local party (players in your party)
+	if (auto pParty = I::TFGCClientSystem->GetParty())
+	{
+		int64_t nMembers = pParty->GetNumMembers();
+		for (int i = 0; i < nMembers; i++)
+		{
+			CSteamID steamID;
+			pParty->GetMember(&steamID, i);
+			uint32_t uAccountID = steamID.GetAccountID();
+			if (uAccountID)
+			{
+				// Mark as party 1 (local party)
+				mapAccountToParty[uAccountID] = 1;
+			}
+		}
+	}
+
+	// Group players by party ID and filter out solo players
+	std::map<uint64_t, std::vector<uint32_t>> mapPartyMembers;
+	for (auto& [uAccountID, uPartyID] : mapAccountToParty)
+	{
+		if (uPartyID != 0)
+			mapPartyMembers[uPartyID].push_back(uAccountID);
+	}
+
+	// Remove parties with only 1 member (not really a party)
+	for (auto it = mapPartyMembers.begin(); it != mapPartyMembers.end();)
+	{
+		if (it->second.size() <= 1)
+			it = mapPartyMembers.erase(it);
+		else
+			++it;
+	}
+
+	// Assign party indices (1-12)
+	std::unordered_map<uint32_t, int> mapAccountToPartyIndex;
+	int nPartyIndex = 1;
+	for (auto& [uPartyID, vMembers] : mapPartyMembers)
+	{
+		if (nPartyIndex > MAX_PARTY_COLORS)
+			break;
+		
+		for (uint32_t uAccountID : vMembers)
+		{
+			mapAccountToPartyIndex[uAccountID] = nPartyIndex;
+		}
+		nPartyIndex++;
+	}
+	m_nNextPartyIndex = nPartyIndex;
+
+	// Now map account IDs to player indices
+	for (int n = 1; n <= I::EngineClient->GetMaxClients(); n++)
+	{
+		player_info_t info;
+		if (!I::EngineClient->GetPlayerInfo(n, &info))
+			continue;
+		
+		if (info.fakeplayer)
+			continue;
+
+		// Get account ID from player resource or steam ID
+		uint32_t uAccountID = 0;
+		
+		// Try to parse from GUID (format: [U:1:ACCOUNTID])
+		std::string guid = info.guid;
+		if (guid.length() > 5 && guid[0] == '[' && guid[1] == 'U')
+		{
+			size_t lastColon = guid.rfind(':');
+			size_t closeBracket = guid.rfind(']');
+			if (lastColon != std::string::npos && closeBracket != std::string::npos && closeBracket > lastColon)
+			{
+				std::string accountStr = guid.substr(lastColon + 1, closeBracket - lastColon - 1);
+				try {
+					uAccountID = static_cast<uint32_t>(std::stoul(accountStr));
+				} catch (...) {}
+			}
+		}
+
+		if (!uAccountID)
+			continue;
+
+		// Store player info
+		PlayerInfoCache cache;
+		cache.bIsF2P = mapAccountToF2P.contains(uAccountID) ? mapAccountToF2P[uAccountID] : false;
+		cache.nPartyIndex = mapAccountToPartyIndex.contains(uAccountID) ? mapAccountToPartyIndex[uAccountID] : 0;
+		m_mapPlayerInfo[n] = cache;
+	}
+}
+
 void CEntityHelper::UpdateCache()
 {
 	const auto pLocal = GetLocal();
@@ -31,6 +195,9 @@ void CEntityHelper::UpdateCache()
 	int nLocalTeam = 0;
 	if (!pLocal->IsInValidTeam(&nLocalTeam))
 		return;
+
+	// Update F2P and party info from GC system
+	UpdatePlayerInfoFromGC();
 
 	// Cache this expensive call
 	const int nHighestIndex = I::ClientEntityList->GetHighestEntityIndex();
@@ -56,112 +223,106 @@ void CEntityHelper::UpdateCache()
 		switch (pEntity->GetClassId())
 		{
 		case ETFClassIds::CTFPlayer:
-				{
-					int nPlayerTeam = 0;
+		{
+			int nPlayerTeam = 0;
 
-					const auto pPlayer = pEntity->As<C_TFPlayer>();
-					if (pPlayer->deadflag() && pPlayer->m_iObserverMode() != OBS_MODE_NONE)
-					{
-						m_mapGroups[EEntGroup::PLAYERS_OBSERVER].push_back(pEntity);
-					}
-
-					if (!pEntity->IsInValidTeam(&nPlayerTeam))
-						continue;
-
-					m_mapGroups[EEntGroup::PLAYERS_ALL].push_back(pEntity);
-					m_mapGroups[nLocalTeam != nPlayerTeam ? EEntGroup::PLAYERS_ENEMIES : EEntGroup::PLAYERS_TEAMMATES].push_back(pEntity);
-
-				break;
+			const auto pPlayer = pEntity->As<C_TFPlayer>();
+			if (pPlayer->deadflag() && pPlayer->m_iObserverMode() != OBS_MODE_NONE)
+			{
+				m_mapGroups[EEntGroup::PLAYERS_OBSERVER].push_back(pEntity);
 			}
+
+			if (!pEntity->IsInValidTeam(&nPlayerTeam))
+				continue;
+
+			m_mapGroups[EEntGroup::PLAYERS_ALL].push_back(pEntity);
+			m_mapGroups[nLocalTeam != nPlayerTeam ? EEntGroup::PLAYERS_ENEMIES : EEntGroup::PLAYERS_TEAMMATES].push_back(pEntity);
+
+			break;
+		}
 
 		case ETFClassIds::CObjectSentrygun:
-			case ETFClassIds::CObjectDispenser:
-			case ETFClassIds::CObjectTeleporter:
-				{
-					int nObjectTeam = 0;
+		case ETFClassIds::CObjectDispenser:
+		case ETFClassIds::CObjectTeleporter:
+		{
+			int nObjectTeam = 0;
 
-					if (!pEntity->IsInValidTeam(&nObjectTeam))
-						continue;
+			if (!pEntity->IsInValidTeam(&nObjectTeam))
+				continue;
 
-					m_mapGroups[EEntGroup::BUILDINGS_ALL].push_back(pEntity);
-					m_mapGroups[nLocalTeam != nObjectTeam ? EEntGroup::BUILDINGS_ENEMIES : EEntGroup::BUILDINGS_TEAMMATES].push_back(pEntity);
+			m_mapGroups[EEntGroup::BUILDINGS_ALL].push_back(pEntity);
+			m_mapGroups[nLocalTeam != nObjectTeam ? EEntGroup::BUILDINGS_ENEMIES : EEntGroup::BUILDINGS_TEAMMATES].push_back(pEntity);
 
-				break;
-			}
+			break;
+		}
 
 		case ETFClassIds::CTFProjectile_Rocket:
-			case ETFClassIds::CTFProjectile_SentryRocket:
-			case ETFClassIds::CTFProjectile_Jar:
-			case ETFClassIds::CTFProjectile_JarGas:
-			case ETFClassIds::CTFProjectile_JarMilk:
-			case ETFClassIds::CTFProjectile_Arrow:
-			case ETFClassIds::CTFProjectile_Flare:
-			case ETFClassIds::CTFProjectile_Cleaver:
-			case ETFClassIds::CTFProjectile_HealingBolt:
-			case ETFClassIds::CTFGrenadePipebombProjectile:
-			case ETFClassIds::CTFProjectile_BallOfFire:
-			case ETFClassIds::CTFProjectile_EnergyRing:
-			case ETFClassIds::CTFProjectile_EnergyBall:
-				{
-					int nProjectileTeam = 0;
+		case ETFClassIds::CTFProjectile_SentryRocket:
+		case ETFClassIds::CTFProjectile_Jar:
+		case ETFClassIds::CTFProjectile_JarGas:
+		case ETFClassIds::CTFProjectile_JarMilk:
+		case ETFClassIds::CTFProjectile_Arrow:
+		case ETFClassIds::CTFProjectile_Flare:
+		case ETFClassIds::CTFProjectile_Cleaver:
+		case ETFClassIds::CTFProjectile_HealingBolt:
+		case ETFClassIds::CTFGrenadePipebombProjectile:
+		case ETFClassIds::CTFProjectile_BallOfFire:
+		case ETFClassIds::CTFProjectile_EnergyRing:
+		case ETFClassIds::CTFProjectile_EnergyBall:
+		{
+			int nProjectileTeam = 0;
 
-					if (!pEntity->IsInValidTeam(&nProjectileTeam))
-						continue;
+			if (!pEntity->IsInValidTeam(&nProjectileTeam))
+				continue;
 
-					if (pEntity->GetClassId() == ETFClassIds::CTFGrenadePipebombProjectile)
-					{
-						const auto pPipebomb = pEntity->As<C_TFGrenadePipebombProjectile>();
+			if (pEntity->GetClassId() == ETFClassIds::CTFGrenadePipebombProjectile)
+			{
+				const auto pPipebomb = pEntity->As<C_TFGrenadePipebombProjectile>();
 
-						/*if (pPipebomb->m_iType() == TF_GL_MODE_REMOTE_DETONATE_PRACTICE)
-							continue;*/
-
-						if (pPipebomb->HasStickyEffects() && pPipebomb->As<C_BaseGrenade>()->m_hThrower().Get() == pLocal)
-							m_mapGroups[EEntGroup::PROJECTILES_LOCAL_STICKIES].push_back(pEntity);
-					}
-
-					m_mapGroups[EEntGroup::PROJECTILES_ALL].push_back(pEntity);
-					m_mapGroups[nLocalTeam != nProjectileTeam ? EEntGroup::PROJECTILES_ENEMIES : EEntGroup::PROJECTILES_TEAMMATES].push_back(pEntity);
-
-				break;
+				if (pPipebomb->HasStickyEffects() && pPipebomb->As<C_BaseGrenade>()->m_hThrower().Get() == pLocal)
+					m_mapGroups[EEntGroup::PROJECTILES_LOCAL_STICKIES].push_back(pEntity);
 			}
+
+			m_mapGroups[EEntGroup::PROJECTILES_ALL].push_back(pEntity);
+			m_mapGroups[nLocalTeam != nProjectileTeam ? EEntGroup::PROJECTILES_ENEMIES : EEntGroup::PROJECTILES_TEAMMATES].push_back(pEntity);
+
+			break;
+		}
 
 		case ETFClassIds::CBaseAnimating:
-				{
-					if (IsHealthPack(pEntity))
-						m_mapGroups[EEntGroup::HEALTHPACKS].push_back(pEntity);
+		{
+			if (IsHealthPack(pEntity))
+				m_mapGroups[EEntGroup::HEALTHPACKS].push_back(pEntity);
 
-					if (IsAmmoPack(pEntity))
-						m_mapGroups[EEntGroup::AMMOPACKS].push_back(pEntity);
+			if (IsAmmoPack(pEntity))
+				m_mapGroups[EEntGroup::AMMOPACKS].push_back(pEntity);
 
-				break;
-			}
+			break;
+		}
 
 		case ETFClassIds::CTFAmmoPack:
-				{
-					m_mapGroups[EEntGroup::AMMOPACKS].push_back(pEntity);
-				break;
-			}
+		{
+			m_mapGroups[EEntGroup::AMMOPACKS].push_back(pEntity);
+			break;
+		}
 
 		case ETFClassIds::CHalloweenGiftPickup:
-				{
-					m_mapGroups[EEntGroup::HALLOWEEN_GIFT].push_back(pEntity);
-
-				break;
-			}
+		{
+			m_mapGroups[EEntGroup::HALLOWEEN_GIFT].push_back(pEntity);
+			break;
+		}
 
 		case ETFClassIds::CCurrencyPack:
-				{
-					if (pEntity->As<C_CurrencyPack>()->m_bDistributed())
-					{
-						continue;
-					}
+		{
+			if (pEntity->As<C_CurrencyPack>()->m_bDistributed())
+				continue;
 
-					m_mapGroups[EEntGroup::MVM_MONEY].push_back(pEntity);
+			m_mapGroups[EEntGroup::MVM_MONEY].push_back(pEntity);
+			break;
+		}
 
-				break;
-			}
-
-		default: break;
+		default:
+			break;
 		}
 	}
 }
