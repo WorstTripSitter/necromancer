@@ -975,6 +975,70 @@ void CAimbotProjectileArc::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBas
 		}
 	}
 
+	// Building targeting - buildings don't move so no movement simulation needed
+	if (CFG::Aimbot_Target_Buildings)
+	{
+		for (const auto pEntity : H::Entities->GetGroup(EEntGroup::BUILDINGS_ENEMIES))
+		{
+			if (!pEntity)
+				continue;
+
+			auto pBuilding = pEntity->As<C_BaseObject>();
+			if (!pBuilding)
+				continue;
+
+			// Get building center as aim position
+			Vec3 vBuildingPos = pBuilding->GetCenter();
+			
+			Vec3 vInitialAngle = Math::CalcAngle(vShootPos, vBuildingPos);
+			float flInitialFOV = Math::CalcFov(vViewAngles, vInitialAngle);
+			
+			// Quick FOV check
+			if (flInitialFOV > CFG::Aimbot_Projectile_FOV * 2.0f)
+				continue;
+
+			// Calculate arc angle to building
+			ArcSolution_t tSolution;
+			if (!CalculateArcAngle(vShootPos, vBuildingPos, weaponInfo.m_flVelocity, weaponInfo.m_flGravity,
+				tSolution, weaponInfo.m_flUpVelocity, nWeaponID))
+				continue;
+
+			Vec3 vAngle = { tSolution.m_flPitch, tSolution.m_flYaw, 0.f };
+			float flTime = tSolution.m_flTime;
+
+			if (flTime > weaponInfo.m_flMaxTime)
+				continue;
+
+			float flFOV = Math::CalcFov(vViewAngles, vAngle);
+			if (flFOV > CFG::Aimbot_Projectile_FOV)
+				continue;
+
+			// Validate path to building
+			int nSimTicks = TIME_TO_TICKS(flTime) + 1;
+			std::vector<Vec3> vProjectilePath;
+			if (!ValidateArcPath(pLocal, pWeapon, vAngle, vBuildingPos, pEntity, nSimTicks, &vProjectilePath))
+				continue;
+
+			bool bBetter = false;
+			if (CFG::Aimbot_Projectile_Sort == 0)
+				bBetter = flFOV < flBestFOV;
+			else
+				bBetter = flTime < flBestTime;
+
+			if (bBetter)
+			{
+				pBestTarget = pEntity;
+				vBestAngle = vAngle;
+				flBestFOV = flFOV;
+				flBestTime = flTime;
+				bHasValidPrediction = true;
+				
+				m_TargetPath.clear(); // Buildings don't move
+				m_ProjectilePath = vProjectilePath;
+			}
+		}
+	}
+
 	if (!pBestTarget)
 	{
 		if (bIsChargeWeapon && !bIsCharging)

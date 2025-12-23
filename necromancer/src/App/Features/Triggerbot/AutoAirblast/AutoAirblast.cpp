@@ -28,7 +28,8 @@ float CAutoAirblast::GetReflectedRocketSpeed(C_BaseProjectile* pProjectile)
 	float flSpeed = vVel.Length();
 
 	// If we have a valid speed, use it
-	if (flSpeed > 100.0f)
+	// Rockets maintain constant speed, so any valid velocity should be used
+	if (flSpeed > 10.0f)
 		return flSpeed;
 
 	// Fallback to default rocket speed
@@ -95,7 +96,9 @@ float CAutoAirblast::GetReflectedProjectileSpeed(C_BaseProjectile* pProjectile)
 	float flSpeed = vVel.Length();
 
 	// If we have a valid speed, use it
-	if (flSpeed > 100.0f)
+	// Use a very low threshold (10 HU/s) to catch slow-moving projectiles like rolling pipes
+	// Only fall back to hardcoded values if the projectile is essentially stationary
+	if (flSpeed > 10.0f)
 		return flSpeed;
 
 	// Fallback speeds based on projectile type
@@ -287,106 +290,99 @@ bool CAutoAirblast::FindAimbotTarget(C_TFPlayer* pLocal, C_BaseProjectile* pProj
 		// Get target eye position for aiming
 		Vec3 vTargetEye = pPlayer->GetViewOffset();
 
-		// Determine aim position based on settings
-		Vec3 vAimPos;
-		bool bSplash = false;
+		// Predict where the projectile will be when the server processes our command
+		Vec3 vProjectileVel;
+		pProjectile->EstimateAbsVelocity(vProjectileVel);
+		Vec3 vPredictedProjectilePos = vProjectilePos + vProjectileVel * flLatency;
 
 		// Check if target is on ground for splash
 		bool bOnGround = pPlayer->m_fFlags() & FL_ONGROUND;
 
-		if (CFG::Aimbot_Amalgam_Projectile_Hitbox_PrioritizeFeet && bOnGround && flSplashRadius > 0.0f)
+		// Hitbox fallback system: try feet (splash) -> body -> head
+		// This ensures we find a valid aim point even if preferred hitbox is blocked
+		struct HitboxAttempt
 		{
-			// Aim at feet for splash damage
-			vAimPos = vPredictedPos + Vec3(0, 0, 1.0f); // Slightly above ground
-			bSplash = true;
-		}
-		else if (CFG::Aimbot_Amalgam_Projectile_Hitbox_Body)
-		{
-			// Aim at body
-			vAimPos = vPredictedPos + Vec3(0, 0, vTargetEye.z * 0.5f);
-		}
-		else
-		{
-			// Aim at center
-			vAimPos = vPredictedPos + Vec3(0, 0, vTargetEye.z * 0.5f);
-		}
+			Vec3 vAimPos;
+			bool bSplash;
+			const char* szName;
+		};
 
-		// The deflection works like this (from SDK):
-		// 1. Server traces from eye position in the direction of viewangles -> hits a point (trace_end)
-		// 2. Rocket's new direction = (trace_end - projectile_position).Normalized()
-		// 3. Rocket flies from its current position in that direction with original speed
-		//
-		// IMPORTANT: The server uses the projectile's position AT THE TIME IT PROCESSES THE COMMAND.
-		// Due to network latency, the projectile will have moved from where we see it now.
-		// We need to predict where the projectile will be when the server processes our airblast.
-		//
-		// The projectile is moving towards us, so we need to extrapolate its position forward in time.
-		Vec3 vProjectileVel;
-		pProjectile->EstimateAbsVelocity(vProjectileVel);
-		
-		// Predict where the projectile will be when the server processes our command
-		// This accounts for the round-trip latency (our command takes time to reach server)
-		Vec3 vPredictedProjectilePos = vProjectilePos + vProjectileVel * flLatency;
-		
-		// The simplest and most reliable approach: aim directly at the target position.
-		// When the server traces from our eye towards where we're looking, it will hit
-		// something at or near the target. The rocket direction will then be:
-		// (trace_hit - projectile_pos).Normalized()
-		//
-		// If we aim at the target and the trace hits it (or goes past it), the rocket
-		// will fly towards that point. This is the most intuitive and reliable method.
-		Vec3 vAngles = Math::CalcAngle(vLocalPos, vAimPos);
-		float flFOVTo = Math::CalcFov(vLocalAngles, vAngles);
-		
-		// Store these for potential splash recalculation
-		Vec3 vDesiredRocketDir = (vAimPos - vPredictedProjectilePos).Normalized();
-		const float flMaxTrace = 8192.0f;
-		Vec3 vTraceTarget = vPredictedProjectilePos + vDesiredRocketDir * flMaxTrace;
+		std::vector<HitboxAttempt> vHitboxes;
 
-		// Check FOV
-		if (flFOVTo > flFOV)
-			continue;
+		// 1. Feet (splash) - only if on ground and splash is possible
+		if (bOnGround && flSplashRadius > 0.0f)
+			vHitboxes.push_back({ vPredictedPos + Vec3(0, 0, 1.0f), true, "feet" });
 
-		// Visibility check - trace from predicted projectile position (where rocket will deflect from)
+		// 2. Body - always try
+		vHitboxes.push_back({ vPredictedPos + Vec3(0, 0, vTargetEye.z * 0.5f), false, "body" });
+
+		// 3. Head - last resort
+		vHitboxes.push_back({ vPredictedPos + Vec3(0, 0, vTargetEye.z * 0.9f), false, "head" });
+
+		// Try each hitbox in order until one works
+		Vec3 vAimPos;
+		Vec3 vAngles;
+		float flFOVTo = 0.0f;
+		bool bSplash = false;
+		bool bFoundValidHitbox = false;
+
 		CTraceFilterWorldCustom filter{};
 		trace_t trace{};
-		H::AimUtils->Trace(vPredictedProjectilePos, vAimPos, MASK_SOLID, &filter, &trace);
 
-		// For splash, we need to hit the ground near the target
-		if (bSplash)
+		for (const auto& hitbox : vHitboxes)
 		{
-			// Trace to ground
-			Vec3 vGroundStart = vAimPos + Vec3(0, 0, 32.0f);
-			Vec3 vGroundEnd = vAimPos - Vec3(0, 0, 64.0f);
-			H::AimUtils->Trace(vGroundStart, vGroundEnd, MASK_SOLID, &filter, &trace);
+			Vec3 vTestAimPos = hitbox.vAimPos;
+			bool bTestSplash = hitbox.bSplash;
 
-			if (trace.fraction >= 1.0f)
-				continue; // No ground found
+			if (bTestSplash)
+			{
+				// For splash, trace to ground first
+				Vec3 vGroundStart = vTestAimPos + Vec3(0, 0, 32.0f);
+				Vec3 vGroundEnd = vTestAimPos - Vec3(0, 0, 64.0f);
+				H::AimUtils->Trace(vGroundStart, vGroundEnd, MASK_SOLID, &filter, &trace);
 
-			vAimPos = trace.endpos;
-			
-			// Recalculate angles to aim directly at the splash point
-			vAngles = Math::CalcAngle(vLocalPos, vAimPos);
-			
-			// Update direction for distance calculations
-			vDesiredRocketDir = (vAimPos - vPredictedProjectilePos).Normalized();
-			vTraceTarget = vPredictedProjectilePos + vDesiredRocketDir * flMaxTrace;
+				if (trace.fraction >= 1.0f)
+					continue; // No ground found, try next hitbox
 
-			// Check if splash would reach target (from predicted projectile position)
-			if (vAimPos.DistTo(vPredictedPos) > flSplashRadius)
-				continue;
-			
-			// Re-check visibility from predicted projectile position to ground impact point
-			H::AimUtils->Trace(vPredictedProjectilePos, vAimPos, MASK_SOLID, &filter, &trace);
-			if (trace.fraction < 0.99f)
-				continue;
+				vTestAimPos = trace.endpos;
+
+				// Check if splash would reach target
+				if (vTestAimPos.DistTo(vPredictedPos) > flSplashRadius)
+					continue; // Too far for splash, try next hitbox
+
+				// Check visibility from predicted projectile position to ground impact point
+				H::AimUtils->Trace(vPredictedProjectilePos, vTestAimPos, MASK_SOLID, &filter, &trace);
+				if (trace.fraction < 0.99f)
+					continue; // Blocked, try next hitbox
+			}
+			else
+			{
+				// Direct hit - check visibility from projectile position
+				H::AimUtils->Trace(vPredictedProjectilePos, vTestAimPos, MASK_SOLID, &filter, &trace);
+				if (trace.fraction < 0.99f && trace.m_pEnt != pPlayer)
+					continue; // Blocked, try next hitbox
+			}
+
+			// Calculate angles
+			Vec3 vTestAngles = Math::CalcAngle(vLocalPos, vTestAimPos);
+			float flTestFOV = Math::CalcFov(vLocalAngles, vTestAngles);
+
+			// Check FOV
+			if (flTestFOV > flFOV)
+				continue; // Outside FOV, try next hitbox
+
+			// This hitbox works!
+			vAimPos = vTestAimPos;
+			vAngles = vTestAngles;
+			flFOVTo = flTestFOV;
+			bSplash = bTestSplash;
+			bFoundValidHitbox = true;
+			break;
 		}
-		else
-		{
-			// Direct hit - check visibility from projectile position
-			if (trace.fraction < 0.99f && trace.m_pEnt != pPlayer)
-				continue;
-		}
+
+		// Skip this target if no valid hitbox found
+		if (!bFoundValidHitbox)
+			continue;
 
 		AimbotTarget target;
 		target.pEntity = pPlayer;
