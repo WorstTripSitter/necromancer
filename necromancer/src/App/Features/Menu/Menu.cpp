@@ -4461,9 +4461,12 @@ void CMenu::MainWindow()
 		{
 			m_nCursorY += CFG::Menu_Spacing_Y;
 
-			// Radio-style tags - only one can be active at a time
-			// Ignored toggle
-			if (CheckBox("Ignored", custom_info.Ignored))
+			// Radio-style tag buttons - only one can be active at a time
+			int tagStartX = m_nCursorX;
+			int tagY = m_nCursorY;
+
+			// Ignored button
+			if (playerListButton(L"ignored", 80, custom_info.Ignored ? CFG::Color_Friend : CFG::Menu_Text_Inactive, true))
 			{
 				if (!custom_info.Ignored)
 					F::Players->Mark(nSelectedPlayerIndex, { true, false, false }); // Set Ignored, clear others
@@ -4471,8 +4474,11 @@ void CMenu::MainWindow()
 					F::Players->Mark(nSelectedPlayerIndex, { false, false, false }); // Clear all
 			}
 
-			// Cheater toggle
-			if (CheckBox("Cheater", custom_info.Cheater))
+			m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
+			m_nCursorY = tagY;
+
+			// Cheater button
+			if (playerListButton(L"cheater", 80, custom_info.Cheater ? CFG::Color_Cheater : CFG::Menu_Text_Inactive, true))
 			{
 				if (!custom_info.Cheater)
 					F::Players->Mark(nSelectedPlayerIndex, { false, true, false }); // Set Cheater, clear others
@@ -4480,14 +4486,20 @@ void CMenu::MainWindow()
 					F::Players->Mark(nSelectedPlayerIndex, { false, false, false }); // Clear all
 			}
 
-			// Retard Legit toggle
-			if (CheckBox("Retard Legit", custom_info.RetardLegit))
+			m_nCursorX += m_nLastButtonW + CFG::Menu_Spacing_X;
+			m_nCursorY = tagY;
+
+			// Retard Legit button
+			if (playerListButton(L"retard legit", 80, custom_info.RetardLegit ? CFG::Color_RetardLegit : CFG::Menu_Text_Inactive, true))
 			{
 				if (!custom_info.RetardLegit)
 					F::Players->Mark(nSelectedPlayerIndex, { false, false, true }); // Set RetardLegit, clear others
 				else
 					F::Players->Mark(nSelectedPlayerIndex, { false, false, false }); // Clear all
 			}
+
+			m_nCursorX = tagStartX;
+			m_nCursorY = tagY + H::Fonts->Get(EFonts::Menu).m_nTall + CFG::Menu_Spacing_Y * 2;
 		}
 		GroupBoxEnd();
 
