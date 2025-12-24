@@ -1,108 +1,48 @@
 #include "../../../SDK/SDK.h"
-
 #include "../CFG.h"
 
-MAKE_SIGNATURE(CTFGameRules_ModifySentChat, "client.dll", "48 89 5C 24 ? 57 48 83 EC ? 80 B9 ? ? ? ? ? 41 8B F8", 0x0);
+// Chat Spammer
+static float g_flLastSpamTime = 0.0f;
 
-//pasted from mfed :muscle:
-const std::vector<std::pair<std::string, std::string>> patterns
+void RunChatSpammer()
 {
-    { "r", "w" },
-    { "l", "w" },
-    { "R", "W" },
-    { "L", "W" },
-    { "n([aeiou])", "ny$1" },
-    { "N([aeiou])", "Ny$1" },
-    { "N([AEIOU])", "NY$1" }
-};
+	if (!CFG::Misc_Chat_Spammer_Active)
+		return;
 
-const std::vector<std::string> suffixes
-{
-    " UwU", " OwO", " owo", " uwu", " nwn", " :3", " >w<", " ^w^", " <3"
-};
+	if (CFG::Misc_Chat_Spammer_Text.empty())
+		return;
 
-std::string owoify(std::string text)
-{
-    for (auto &pattern : patterns)
-    {
-        std::regex reg(pattern.first);
+	if (!I::EngineClient->IsConnected() || !I::EngineClient->IsInGame())
+		return;
 
-        text = std::regex_replace(text, reg, pattern.second);
-    }
+	float flCurrentTime = I::GlobalVars->realtime;
+	if (flCurrentTime - g_flLastSpamTime < CFG::Misc_Chat_Spammer_Interval)
+		return;
 
-    if (text.size() < 124)
-    {
-        int suffix{ I::UniformRandomStream->RandomInt(0, static_cast<int>(suffixes.size() - 1)) };
+	g_flLastSpamTime = flCurrentTime;
 
-        text += suffixes[suffix];
-    }
-
-    return text;
+	std::string cmd = "say \"" + CFG::Misc_Chat_Spammer_Text + "\"";
+	I::EngineClient->ClientCmd_Unrestricted(cmd.c_str());
 }
 
-MAKE_HOOK(IVEngineClient013_ClientCmd_Unrestricted, Memory::GetVFunc(I::EngineClient, 106), void, __fastcall,
-    void* ecx, const char *szCmdString)
+// Killsay - called when we kill someone
+void OnKill(const char* victimName)
 {
-    if (CFG::Misc_Chat_Owoify)
-    {
-        if (strstr(szCmdString, "say"))
-        {
-            std::string cmdString(szCmdString);
+	if (!CFG::Misc_Chat_Killsay_Active)
+		return;
 
-            if (cmdString.rfind("say", 0) != 0)
-            {
-                return CALL_ORIGINAL(ecx, szCmdString);
-            }
+	if (CFG::Misc_Chat_Killsay_Text.empty())
+		return;
 
-            std::smatch match{};
-            std::regex_search(cmdString, match, std::regex("(say.* )\"(.*)\""));
+	std::string message = CFG::Misc_Chat_Killsay_Text;
+	
+	// Replace {name} with victim's name if present
+	size_t pos = message.find("{name}");
+	if (pos != std::string::npos && victimName)
+	{
+		message.replace(pos, 6, victimName);
+	}
 
-            cmdString = match[1].str() + "\"" + owoify(match[2].str()) + "\"";
-
-            return CALL_ORIGINAL(ecx, cmdString.c_str());
-        }
-    }
-
-    return CALL_ORIGINAL(ecx, szCmdString);
-}
-
-MAKE_HOOK(CTFGameRules_ModifySentChat, Signatures::CTFGameRules_ModifySentChat.Get(), void, __fastcall,
-    void* ecx, char *pBuf, int iBufSize)
-{
-    static ConVar *tf_medieval_autorp{ I::CVar->FindVar("tf_medieval_autorp") };
-    static ConVar *english{ I::CVar->FindVar("english") };
-
-    if (CFG::Misc_Chat_Medieval && pBuf && iBufSize && tf_medieval_autorp && english)
-    {
-        struct s_CTFGameRules
-        {
-            char pad[1179]{};
-            bool m_bPlayingMedieval{};
-        };
-
-        s_CTFGameRules *gamerules{ reinterpret_cast<s_CTFGameRules *>(ecx) };
-
-        if (!tf_medieval_autorp || !english || !gamerules)
-        {
-            return CALL_ORIGINAL(ecx, pBuf, iBufSize);
-        }
-
-        bool originalEnglish{ english->GetBool() };
-        bool originalAutoRP{ tf_medieval_autorp->GetBool() };
-        bool originalPlaying{ gamerules->m_bPlayingMedieval };
-
-        gamerules->m_bPlayingMedieval = true;
-        tf_medieval_autorp->SetValue(true);
-        english->SetValue(true);
-
-        CALL_ORIGINAL(ecx, pBuf, iBufSize);
-
-        gamerules->m_bPlayingMedieval = originalPlaying;
-        tf_medieval_autorp->SetValue(originalAutoRP);
-        english->SetValue(originalEnglish);
-
-        return;
-    }
-
-    CALL_ORIGINAL(ecx, pBuf, iBufSize);
+	std::string cmd = "say \"" + message + "\"";
+	I::EngineClient->ClientCmd_Unrestricted(cmd.c_str());
 }

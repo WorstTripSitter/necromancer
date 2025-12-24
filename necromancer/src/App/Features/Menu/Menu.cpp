@@ -808,11 +808,13 @@ bool CMenu::InputText(const char *szLabel, const char *szLabel2, std::string &st
 		return true;
 	}();
 
-	static std::string strTemp = {};
+	// Use a map to store temp strings per input field
+	static std::map<void*, std::string> mapTempStrings;
+	std::string& strTemp = mapTempStrings[&strOutput];
 
 	if (bHovered && H::Input->IsPressed(VK_LBUTTON) && !m_bClickConsumed && bCanOpen) {
 		m_bClickConsumed = m_mapStates[&strOutput] = true;
-		strTemp.clear();
+		strTemp = strOutput; // Load existing text for editing
 	}
 
 	if (H::Input->IsPressed(VK_ESCAPE) || H::Input->IsPressed(VK_INSERT) || H::Input->IsPressed(VK_F3)) {
@@ -840,22 +842,60 @@ bool CMenu::InputText(const char *szLabel, const char *szLabel2, std::string &st
 			POS_CENTERY, szLabel2, {}
 		);
 
-		if (strTemp.length() < 15)
+		// Allow up to 128 characters
+		if (strTemp.length() < 128)
 		{
-			for (int n = 0; n < 256; n++)
+			bool bShift = H::Input->IsHeld(VK_SHIFT);
+			bool bCaps = (GetKeyState(VK_CAPITAL) & 1) != 0;
+			
+			// Letters A-Z
+			for (int n = 'A'; n <= 'Z'; n++)
 			{
-				if ((n > 'A' - 1 && n < 'Z' + 1) && H::Input->IsPressedAndHeld(n))
+				if (H::Input->IsPressedAndHeld(n))
 				{
-					char ch = 0;
-
-					if ((GetKeyState(VK_CAPITAL) & 1) || H::Input->IsHeld(VK_SHIFT))
-						ch = static_cast<char>(n);
-
-					else ch = static_cast<char>(std::tolower(n));
-
+					char ch = (bCaps != bShift) ? static_cast<char>(n) : static_cast<char>(std::tolower(n));
 					strTemp += ch;
 				}
 			}
+			
+			// Numbers 0-9 and their shift variants
+			const char* numShift = ")!@#$%^&*(";
+			for (int n = '0'; n <= '9'; n++)
+			{
+				if (H::Input->IsPressedAndHeld(n))
+				{
+					char ch = bShift ? numShift[n - '0'] : static_cast<char>(n);
+					strTemp += ch;
+				}
+			}
+			
+			// Space
+			if (H::Input->IsPressedAndHeld(VK_SPACE))
+				strTemp += ' ';
+			
+			// Special characters
+			if (H::Input->IsPressedAndHeld(VK_OEM_PERIOD)) // . >
+				strTemp += bShift ? '>' : '.';
+			if (H::Input->IsPressedAndHeld(VK_OEM_COMMA)) // , <
+				strTemp += bShift ? '<' : ',';
+			if (H::Input->IsPressedAndHeld(VK_OEM_2)) // / ?
+				strTemp += bShift ? '?' : '/';
+			if (H::Input->IsPressedAndHeld(VK_OEM_1)) // ; :
+				strTemp += bShift ? ':' : ';';
+			if (H::Input->IsPressedAndHeld(VK_OEM_7)) // ' "
+				strTemp += bShift ? '"' : '\'';
+			if (H::Input->IsPressedAndHeld(VK_OEM_4)) // [ {
+				strTemp += bShift ? '{' : '[';
+			if (H::Input->IsPressedAndHeld(VK_OEM_6)) // ] }
+				strTemp += bShift ? '}' : ']';
+			if (H::Input->IsPressedAndHeld(VK_OEM_5)) // \ |
+				strTemp += bShift ? '|' : '\\';
+			if (H::Input->IsPressedAndHeld(VK_OEM_MINUS)) // - _
+				strTemp += bShift ? '_' : '-';
+			if (H::Input->IsPressedAndHeld(VK_OEM_PLUS)) // = +
+				strTemp += bShift ? '+' : '=';
+			if (H::Input->IsPressedAndHeld(VK_OEM_3)) // ` ~
+				strTemp += bShift ? '~' : '`';
 		}
 
 		if (strTemp.length() > 0)
@@ -865,18 +905,38 @@ bool CMenu::InputText(const char *szLabel, const char *szLabel2, std::string &st
 		}
 
 		if (H::Input->IsPressed(VK_RETURN)) {
-			bCallback = strTemp.length() > 0;
-			strOutput = std::string(strTemp.begin(), strTemp.end());
+			bCallback = true;
+			strOutput = strTemp;
 			m_mapStates[&strOutput] = false;
 			strTemp.clear();
 		}
 
+		// Display text with overflow handling
+		// Use a separate static map for display strings to handle truncation
+		static std::map<void*, std::string> mapDisplayStrings;
+		std::string& strDisplay = mapDisplayStrings[&strOutput];
+		
+		int maxDisplayWidth = w - (CFG::Menu_Spacing_X * 2);
+		strDisplay = strTemp;
+		
+		// If text is too wide, show only the end portion (so user sees what they're typing)
+		int textW = 0, textH = 0;
+		I::MatSystemSurface->GetTextSize(H::Fonts->Get(EFonts::Menu).m_dwFont, Utils::ConvertUtf8ToWide(strDisplay).c_str(), textW, textH);
+		
+		while (textW > maxDisplayWidth && strDisplay.length() > 1)
+		{
+			strDisplay = strDisplay.substr(1);
+			I::MatSystemSurface->GetTextSize(H::Fonts->Get(EFonts::Menu).m_dwFont, Utils::ConvertUtf8ToWide(strDisplay).c_str(), textW, textH);
+		}
+
+		// Position near bottom of input box (h=30), below the label
+		int textY = y + h - H::Fonts->Get(EFonts::Menu).m_nTall - 2;
 		H::LateRender->String(
 			H::Fonts->Get(EFonts::Menu),
 			x + CFG::Menu_Spacing_X,
-			y + (h - H::Fonts->Get(EFonts::Menu).m_nTall) + CFG::Menu_Spacing_Y,
+			textY,
 			CFG::Menu_Text_Active,
-			POS_CENTERY, strTemp.c_str(), {}
+			POS_DEFAULT, strDisplay.c_str(), {}
 		);
 	}
 
@@ -3338,8 +3398,17 @@ void CMenu::MainWindow()
 		};
 
 		m_mapGroupBoxes["Misc_Chat"].m_fnRenderContent = [this]() {
-			CheckBox("Medieval", CFG::Misc_Chat_Medieval);
-			CheckBox("OwO-ify", CFG::Misc_Chat_Owoify);
+			CheckBox("Chat Spammer", CFG::Misc_Chat_Spammer_Active);
+			if (CFG::Misc_Chat_Spammer_Active)
+			{
+				InputText("Spam Text", "Enter message:", CFG::Misc_Chat_Spammer_Text);
+				SliderFloat("Interval", CFG::Misc_Chat_Spammer_Interval, 0.1f, 10.0f, 0.1f, "%.1fs");
+			}
+			CheckBox("Killsay", CFG::Misc_Chat_Killsay_Active);
+			if (CFG::Misc_Chat_Killsay_Active)
+			{
+				InputText("Killsay Text", "Enter message:", CFG::Misc_Chat_Killsay_Text);
+			}
 		};
 
 		m_mapGroupBoxes["Misc_Taunt"].m_fnRenderContent = [this]() {
@@ -4832,7 +4901,7 @@ void CMenu::HandleGroupBoxDrag()
 				else if (id == "Misc_Movement") CFG::Menu_GroupBox_Misc_Movement = configValue;
 				else if (id == "Exploits_Shifting") CFG::Menu_GroupBox_Exploits_Shifting = configValue;
 				else if (id == "Exploits_FakeLag") CFG::Menu_GroupBox_Exploits_FakeLag = configValue;
-				else if (id == "Exploits_Crits") CFG::Menu_GroupBox_Exploits_Crits = configValue;
+				else if (id == "Exploits_Crit (BETA)") CFG::Menu_GroupBox_Exploits_Crits = configValue;
 				else if (id == "Exploits_No Spread") CFG::Menu_GroupBox_Exploits_NoSpread = configValue;
 			};
 			

@@ -4,6 +4,7 @@
 #include "../Features/Triggerbot/AutoVaccinator/AutoVaccinator.h"
 #include "../Features/Players/Players.h"
 #include "../Features/Crits/Crits.h"
+#include "../Features/Chat/Chat.h"
 
 MAKE_SIGNATURE(CGameEventManager_FireEventIntern, "engine.dll", "44 88 44 24 ? 48 89 4C 24 ? 55 57", 0x0);
 
@@ -92,6 +93,9 @@ MAKE_HOOK(CGameEventManager_FireEventIntern, Signatures::CGameEventManager_FireE
 								{
 									uint64_t victimSteamID = static_cast<uint64_t>(victimInfo.friendsID) + 0x0110000100000000ULL;
 									F::Players->RecordKill(victimSteamID);
+									
+									// Killsay
+									OnKill(victimInfo.name);
 									break;
 								}
 							}

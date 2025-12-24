@@ -178,6 +178,7 @@
     <ClInclude Include="src\App\Features\VisualUtils\VisualUtils.h" />
     <ClInclude Include="src\App\Features\WorldModulation\WorldModulation.h" />
     <ClInclude Include="src\App\Features\CFG.h" />
+    <ClInclude Include="src\App\Features\Chat\Chat.h" />
     <ClInclude Include="src\App\Hooks\WINAPI_WndProc.h" />
     <ClInclude Include="src\App\App.h" />
     <ClInclude Include="src\SDK\Helpers\Draw\Draw.h" />

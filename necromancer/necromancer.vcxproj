@@ -545,6 +545,7 @@
     <ClInclude Include="src\SDK\Helpers\AimUtils\AimUtils.h" />
     <ClInclude Include="src\App\Features\Triggerbot\AutoVaccinator\AutoVaccinator.h" />
     <ClInclude Include="src\App\Features\CFG.h" />
+    <ClInclude Include="src\App\Features\Chat\Chat.h" />
     <ClInclude Include="src\App\Features\EnginePrediction\EnginePrediction.h" />
     <ClInclude Include="src\App\Features\ESP\ESP.h" />
     <ClInclude Include="src\App\Features\LagRecords\LagRecords.h" />

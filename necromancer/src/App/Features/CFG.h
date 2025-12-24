@@ -606,8 +606,14 @@ namespace CFG
 	CFGVAR(Exploits_SeedPred_Active, true);
 	CFGVAR(Exploits_SeedPred_DrawIndicator, false);
 
-	CFGVAR(Misc_Chat_Medieval, false);
-	CFGVAR(Misc_Chat_Owoify, false);
+	// Chat Spammer
+	CFGVAR(Misc_Chat_Spammer_Active, false);
+	CFGVAR(Misc_Chat_Spammer_Text, std::string(""));
+	CFGVAR(Misc_Chat_Spammer_Interval, 1.0f);
+	
+	// Killsay
+	CFGVAR(Misc_Chat_Killsay_Active, false);
+	CFGVAR(Misc_Chat_Killsay_Text, std::string(""));
 
 	CFGVAR(Misc_Freeze_Queue, false);
 	CFGVAR(Misc_Auto_Queue, false);

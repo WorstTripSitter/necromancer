@@ -2,6 +2,7 @@
 
 #include "../Features/Menu/Menu.h"
 #include "../CheaterDatabase/CheaterDatabase.h"
+#include "../Features/Chat/Chat.h"
 
 #include "../Features/ESP/ESP.h"
 #include "../Features/Radar/Radar.h"
@@ -26,6 +27,9 @@ MAKE_HOOK(IEngineVGuiInternal_Paint, Memory::GetVFunc(I::EngineVGui, 14), void, 
 
 		// Process pending ban alerts on main thread
 		ProcessPendingBanAlerts();
+		
+		// Run chat spammer
+		RunChatSpammer();
 
 		I::MatSystemSurface->StartDrawing();
 		{
