@@ -12,6 +12,39 @@
 
 #include "Features/CFG.h"
 
+// Captures the user's original game settings before we override them
+// This way new users get their own settings as defaults instead of forced values
+static void CaptureOriginalGameSettings()
+{
+	// Capture FOV from convar (fov_desired is the user's preferred FOV)
+	if (const auto fov_desired = I::CVar->FindVar("fov_desired"))
+	{
+		float originalFov = fov_desired->GetFloat();
+		if (originalFov >= 70.0f && originalFov <= 140.0f)
+		{
+			CFG::Visuals_FOV_Override = originalFov;
+		}
+	}
+
+	// Capture minimal viewmodel setting
+	if (const auto tf_use_min_viewmodels = I::CVar->FindVar("tf_use_min_viewmodels"))
+	{
+		CFG::Visuals_ViewModel_Minimal = (tf_use_min_viewmodels->GetInt() != 0);
+	}
+
+	// Capture flip viewmodel setting
+	if (const auto cl_flipviewmodels = I::CVar->FindVar("cl_flipviewmodels"))
+	{
+		CFG::Visuals_Viewmodel_Flip = (cl_flipviewmodels->GetInt() != 0);
+	}
+
+	// Capture world model viewmodel setting
+	if (const auto cl_first_person_uses_world_model = I::CVar->FindVar("cl_first_person_uses_world_model"))
+	{
+		CFG::Visuals_ViewModel_WorldModel = (cl_first_person_uses_world_model->GetInt() != 0);
+	}
+}
+
 void CApp::Start()
 {
 	// Initialize crash handler first to catch any crashes during initialization
@@ -75,7 +108,9 @@ void CApp::Start()
 	F::Players->Parse();
 	F::Players->ImportLegacyPlayers(); // Auto-import players.json from old seonwdde folder
 
-	Config::Load(U::Storage->GetConfigFolder() / "default.json");
+	// Capture user's original game settings
+	// This sets the CFG values to match the user's current game settings
+	CaptureOriginalGameSettings();
 
 	const auto month = []
 	{

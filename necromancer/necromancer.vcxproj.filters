@@ -27,6 +27,7 @@
     <ClCompile Include="src\App\Hooks\IBaseClientDLL_FrameStageNotify.cpp" />
     <ClCompile Include="src\App\Hooks\IEngineVGuiInternal_Paint.cpp" />
     <ClCompile Include="src\App\Hooks\CTFClientScoreBoardDialog_UpdatePlayerAvatar.cpp" />
+    <ClCompile Include="src\App\Hooks\CTFGCClientSystem_UpdateAssignedLobby.cpp" />
     <ClCompile Include="src\App\Hooks\WINAPI_WndProc.cpp" />
     <ClCompile Include="src\App\App.cpp" />
     <ClCompile Include="src\SDK\Helpers\Draw\Draw.cpp" />

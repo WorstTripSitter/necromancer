@@ -5,6 +5,7 @@
 // Signatures for GC client system
 MAKE_SIGNATURE(CGCClientSharedObjectCache_FindTypeCache, "client.dll", "48 89 5C 24 ? 48 89 74 24 ? 57 48 83 EC ? 0F B7 59 ? BE", 0x0);
 MAKE_SIGNATURE(CTFGCClientSystem_GetParty, "client.dll", "48 83 EC ? 48 8B 89 ? ? ? ? 48 85 C9 74 ? BA ? ? ? ? E8 ? ? ? ? 48 85 C0 74 ? 8B 48 ? 85 C9 74 ? 48 8B 40 ? FF C9", 0x0);
+MAKE_SIGNATURE(CTFGCClientSystem_UpdateAssignedLobby, "client.dll", "40 55 53 41 54 41 56 41 57 48 8B EC", 0x0);
 
 // Lobby player proto - contains F2P status and party info
 struct CTFLobbyPlayerProto
@@ -174,6 +175,12 @@ public:
 			return nullptr;
 
 		return reinterpret_cast<CTFLobbyShared*>(reinterpret_cast<uintptr_t>(pLobby) - 8);
+	}
+
+	// Set F2P/non-premium account status (false = premium, bypasses chat restriction)
+	void SetNonPremiumAccount(bool bValue)
+	{
+		*reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(this) + 1888) = bValue;
 	}
 };
 
