@@ -1,6 +1,7 @@
 #include "../../SDK/SDK.h"
 
 #include "../Features/CFG.h"
+#include "../Features/EnginePrediction/EnginePrediction.h"
 
 MAKE_HOOK(CPrediction_RunCommand, Memory::GetVFunc(I::Prediction, 17), void, __fastcall,
 	CPrediction* ecx, C_BasePlayer* player, CUserCmd* pCmd, IMoveHelper* moveHelper)
@@ -14,7 +15,10 @@ MAKE_HOOK(CPrediction_RunCommand, Memory::GetVFunc(I::Prediction, 17), void, __f
 		}
 	}
 
+	// Adjust players for prediction (like Amalgam does)
+	F::EnginePrediction->AdjustPlayers(player);
 	CALL_ORIGINAL(ecx, player, pCmd, moveHelper);
+	F::EnginePrediction->RestorePlayers();
 
 	if (const auto pLocal = H::Entities->GetLocal())
 	{

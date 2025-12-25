@@ -3123,6 +3123,7 @@ void CMenu::MainWindow()
 				ColorPicker("Movement Sim", CFG::Color_Simulation_Movement);
 				ColorPicker("Projectile Sim", CFG::Color_Simulation_Projectile);
 				ColorPicker("Trajectory", CFG::Color_Trajectory);
+				ColorPicker("FakeLag", CFG::Color_FakeLag);
 			}
 			GroupBoxEnd();
 
@@ -3173,7 +3174,7 @@ void CMenu::MainWindow()
 
 			RegisterGroupBox("Exploits", "Shifting", col1, ord1, 150);
 			RegisterGroupBox("Exploits", "FakeLag", col2, ord2, 150);
-			RegisterGroupBox("Exploits", "Crit (BETA)", col3, ord3, 150);
+			RegisterGroupBox("Exploits", "Crithack", col3, ord3, 150);
 			RegisterGroupBox("Exploits", "No Spread", col4, ord4, 150);
 			bExploitsInitialized = true;
 		}
@@ -3193,9 +3194,9 @@ void CMenu::MainWindow()
 				m_mapGroupBoxes["Exploits_FakeLag"].m_nColumn = col2;
 				m_mapGroupBoxes["Exploits_FakeLag"].m_nOrderInColumn = ord2;
 			}
-			if (m_mapGroupBoxes.find("Exploits_Crit (BETA)") != m_mapGroupBoxes.end()) {
-				m_mapGroupBoxes["Exploits_Crit (BETA)"].m_nColumn = col3;
-				m_mapGroupBoxes["Exploits_Crit (BETA)"].m_nOrderInColumn = ord3;
+			if (m_mapGroupBoxes.find("Exploits_Crithack") != m_mapGroupBoxes.end()) {
+				m_mapGroupBoxes["Exploits_Crithack"].m_nColumn = col3;
+				m_mapGroupBoxes["Exploits_Crithack"].m_nOrderInColumn = ord3;
 			}
 			if (m_mapGroupBoxes.find("Exploits_No Spread") != m_mapGroupBoxes.end()) {
 				m_mapGroupBoxes["Exploits_No Spread"].m_nColumn = col4;
@@ -3229,14 +3230,11 @@ void CMenu::MainWindow()
 				CFG::Exploits_FakeLag_Max_Ticks, 1, nMaxFakeLagTicks, 1);
 			CheckBox("Only When Moving", CFG::Exploits_FakeLag_Only_Moving);
 			CheckBox("Activate on Sightline", CFG::Exploits_FakeLag_Activate_On_Sightline);
-			CheckBox("Ignore DT Ticks", CFG::Exploits_FakeLag_Ignore_DT_Ticks);
-			CheckBox("FakeLag Indicator", CFG::Exploits_FakeLag_Indicator);
 		};
 
-		m_mapGroupBoxes["Exploits_Crit (BETA)"].m_fnRenderContent = [this]() {
+		m_mapGroupBoxes["Exploits_Crithack"].m_fnRenderContent = [this]() {
 			InputKey("Key", CFG::Exploits_Crits_Force_Crit_Key);
 			InputKey("Melee Key", CFG::Exploits_Crits_Force_Crit_Key_Melee);
-			CheckBox("Skip Random Crits", CFG::Exploits_Crits_Skip_Random_Crits);
 			CheckBox("Ignore Crit Ban", CFG::Exploits_Crits_Ignore_Ban);
 			CheckBox("Crit Indicator", CFG::Visuals_Crit_Indicator);
 			CheckBox("Indicator Debug", CFG::Visuals_Crit_Indicator_Debug);
@@ -4902,7 +4900,7 @@ void CMenu::HandleGroupBoxDrag()
 				else if (id == "Misc_Movement") CFG::Menu_GroupBox_Misc_Movement = configValue;
 				else if (id == "Exploits_Shifting") CFG::Menu_GroupBox_Exploits_Shifting = configValue;
 				else if (id == "Exploits_FakeLag") CFG::Menu_GroupBox_Exploits_FakeLag = configValue;
-				else if (id == "Exploits_Crit (BETA)") CFG::Menu_GroupBox_Exploits_Crits = configValue;
+				else if (id == "Exploits_Crithack") CFG::Menu_GroupBox_Exploits_Crits = configValue;
 				else if (id == "Exploits_No Spread") CFG::Menu_GroupBox_Exploits_NoSpread = configValue;
 			};
 			

@@ -34,21 +34,11 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 		return CALL_ORIGINAL(ecx, flInputSampleTime, pCmd);
 	}
 
-	// EARLY CRITHACK: Run before Prediction->Update to ensure the modified command number
-	// is used when CalcIsAttackCritical is called during prediction
-	{
-		auto pLocalEarly = H::Entities->GetLocal();
-		auto pWeaponEarly = H::Entities->GetWeapon();
-		if (pLocalEarly && pWeaponEarly && !pLocalEarly->deadflag())
-		{
-			// Set G::bCanPrimaryAttack early so CritHack can detect melee attacks
-			G::bCanPrimaryAttack = pWeaponEarly->CanPrimaryAttack(pLocalEarly);
-			G::bCanSecondaryAttack = pWeaponEarly->CanSecondaryAttack(pLocalEarly);
-			
-			// Run CritHack early to modify command number before prediction
-			F::CritHack->Run(pLocalEarly, pWeaponEarly, pCmd);
-		}
-	}
+	// Get the actual command from the input buffer - this is what gets sent to the server
+	// The pCmd parameter might be a copy, so we need to modify the buffer directly
+	CUserCmd* pBufferCmd = I::Input->GetUserCmd(pCmd->command_number);
+	if (!pBufferCmd)
+		pBufferCmd = pCmd;
 
 	I::Prediction->Update
 	(
@@ -73,19 +63,28 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 
 	if (F::RapidFire->ShouldExitCreateMove(pCmd))
 	{
-		auto pLocalEarly = H::Entities->GetLocal();
-		auto pWeaponEarly = H::Entities->GetWeapon();
-		
-		// IMPORTANT: Set G::bCanPrimaryAttack before calling CritHack
-		// Otherwise melee crit detection won't work because it checks this flag
-		if (pLocalEarly && pWeaponEarly)
+		// During shifting, we still need to run CritHack to apply the forced command number
+		// CritHack stores the forced command on the first tick (bRapidFireWantShift)
+		// and reuses it for all shifted ticks
+		auto pLocal = H::Entities->GetLocal();
+		auto pWeapon = H::Entities->GetWeapon();
+		if (pLocal && pWeapon && !pLocal->deadflag())
 		{
-			G::bCanPrimaryAttack = pWeaponEarly->CanPrimaryAttack(pLocalEarly);
-			G::bCanSecondaryAttack = pWeaponEarly->CanSecondaryAttack(pLocalEarly);
+			// Get the buffer command - this is what actually gets sent to server
+			CUserCmd* pBufferCmd = I::Input->GetUserCmd(pCmd->command_number);
+			if (!pBufferCmd)
+				pBufferCmd = pCmd;
+			
+			F::CritHack->Run(pLocal, pWeapon, pBufferCmd);
+			
+			// Sync changes back to pCmd
+			if (pBufferCmd != pCmd)
+			{
+				pCmd->command_number = pBufferCmd->command_number;
+				pCmd->random_seed = pBufferCmd->random_seed;
+			}
 		}
 		
-		F::CritHack->Run(pLocalEarly, pWeaponEarly, pCmd);
-
 		return F::RapidFire->GetShiftSilentAngles() ? false : CALL_ORIGINAL(ecx, flInputSampleTime, pCmd);
 	}
 
@@ -136,6 +135,15 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 		G::bCanPrimaryAttack = pWeapon->CanPrimaryAttack(pLocal);
 		G::bCanSecondaryAttack = pWeapon->CanSecondaryAttack(pLocal);
 		
+		// Minigun special handling - matches Amalgam's UpdateInfo()
+		// Minigun can only attack when in FIRING or SPINNING state
+		if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+		{
+			int iState = pWeapon->As<C_TFMinigun>()->m_iWeaponState();
+			if ((iState != AC_STATE_FIRING && iState != AC_STATE_SPINNING) || !pWeapon->HasPrimaryAmmoForShot())
+				G::bCanPrimaryAttack = false;
+		}
+		
 		// Amalgam's default case logic for non-melee weapons
 		if (pWeapon->GetSlot() != WEAPON_SLOT_MELEE)
 		{
@@ -160,6 +168,13 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	else
 	{
 		G::bCanHeadshot = false;
+	}
+
+	// Set G::Attacking like Amalgam does in UpdateInfo
+	// This is needed for CritHack to detect manual attacks
+	if (pLocal && pWeapon)
+	{
+		G::Attacking = SDK::IsAttacking(pLocal, pWeapon, pCmd, false);
 	}
 
 	//nTicksSinceCanFire
@@ -214,7 +229,7 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	// CritHack runs early for manual shooting, but we also need to run it
 	// AFTER aimbot for aimbot-triggered shots
 
-	F::EnginePrediction->Start(pCmd);
+	F::EnginePrediction->Start(pLocal, pCmd);
 	{
 		// OPTIMIZATION: Use cached pLocal instead of getting it again
 		if (CFG::Misc_Choke_On_Bhop && CFG::Misc_Bunnyhop)
@@ -233,11 +248,19 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 		F::Misc->CrouchWhileAirborne(pCmd);
 		
 		// Run CritHack AFTER aimbot so it can detect aimbot-triggered attacks
-		// This is how Amalgam does it
-		F::CritHack->Run(pLocal, pWeapon, pCmd);
+		// Use pBufferCmd to modify the actual command that gets sent to the server
+		F::CritHack->Run(pLocal, pWeapon, pBufferCmd);
+		
+		// Sync the local pCmd with buffer changes (for other features that use pCmd)
+		if (pBufferCmd != pCmd)
+		{
+			pCmd->command_number = pBufferCmd->command_number;
+			pCmd->random_seed = pBufferCmd->random_seed;
+		}
+		
 		F::Triggerbot->Run(pCmd);
 	}
-	F::EnginePrediction->End();
+	F::EnginePrediction->End(pLocal, pCmd);
 	
 	F::Misc->AutoCallMedic();
 

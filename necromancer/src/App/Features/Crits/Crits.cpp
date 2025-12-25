@@ -2,6 +2,7 @@
 
 #include "../CFG.h"
 #include "../Menu/Menu.h"
+#include "../amalgam_port/AmalgamCompat.h"
 
 // Convert command number to seed with entity/player mask (Amalgam's method)
 int CCritHack::CommandToSeed(int iCommandNumber)
@@ -320,115 +321,22 @@ int CCritHack::GetCritRequest(CUserCmd* pCmd, C_TFWeaponBase* pWeapon)
 	return bCanCrit && bPressed ? CritRequest_Crit : bSkip || bDesync ? CritRequest_Skip : CritRequest_Any;
 }
 
-
-// Apply pending indicator update for weapons that don't track properly
-// This manually updates the bucket values when we detect a shot was fired
-void CCritHack::ApplyPendingIndicatorUpdate(C_TFWeaponBase* pWeapon)
-{
-	if (!m_bPendingShot)
-		return;
-	
-	// Check if a shot was actually fired by comparing clip/ammo
-	int iCurrentClip = pWeapon->m_iClip1();
-	int iCurrentAmmo = 0;
-	
-	auto pLocal = H::Entities->GetLocal();
-	if (pLocal)
-	{
-		int iAmmoType = pWeapon->m_iPrimaryAmmoType();
-		if (iAmmoType >= 0)
-			iCurrentAmmo = pLocal->GetAmmoCount(iAmmoType);
-	}
-	
-	// Detect if a shot was fired (clip decreased or ammo decreased for weapons without clip)
-	bool bShotFired = false;
-	if (m_iLastClip > 0 && iCurrentClip < m_iLastClip)
-		bShotFired = true;
-	else if (m_iLastClip <= 0 && m_iLastAmmo > 0 && iCurrentAmmo < m_iLastAmmo)
-		bShotFired = true;
-	
-	// Also check if the game already updated the values
-	float flCurrentBucket = pWeapon->m_flCritTokenBucket();
-	int iCurrentCritChecks = pWeapon->m_nCritChecks();
-	int iCurrentCritSeedRequests = pWeapon->m_nCritSeedRequests();
-	
-	bool bGameUpdated = (flCurrentBucket != m_flLastBucket) || 
-	                    (iCurrentCritChecks != m_iLastCritChecks) || 
-	                    (iCurrentCritSeedRequests != m_iLastCritSeedRequests);
-	
-	// If shot was fired but game didn't update, manually update
-	if (bShotFired && !bGameUpdated)
-	{
-		// Get bucket cap
-		static auto tf_weapon_criticals_bucket_cap = I::CVar->FindVar("tf_weapon_criticals_bucket_cap");
-		const float flBucketCap = tf_weapon_criticals_bucket_cap ? tf_weapon_criticals_bucket_cap->GetFloat() : 1000.f;
-		
-		// Calculate damage per shot
-		float flDamage = pWeapon->GetDamage();
-		int nProjectilesPerShot = pWeapon->GetBulletsPerShot();
-		if (!m_bMelee && nProjectilesPerShot > 0)
-			nProjectilesPerShot = static_cast<int>(SDKUtils::AttribHookValue(static_cast<float>(nProjectilesPerShot), "mult_bullets_per_shot", pWeapon));
-		else
-			nProjectilesPerShot = 1;
-		float flBaseDamage = flDamage * nProjectilesPerShot;
-		
-		// For rapid fire weapons, scale damage by crit duration
-		if (pWeapon->IsRapidFire())
-		{
-			float flFireRate = pWeapon->GetFireRate();
-			flDamage = flBaseDamage * TF_DAMAGE_CRIT_DURATION_RAPID / flFireRate;
-			if (flDamage * TF_DAMAGE_CRIT_MULTIPLIER > flBucketCap)
-				flDamage = flBucketCap / TF_DAMAGE_CRIT_MULTIPLIER;
-		}
-		else
-		{
-			flDamage = flBaseDamage;
-		}
-		
-		// Calculate cost multiplier based on crit ratio
-		int iCritChecks = pWeapon->m_nCritChecks();
-		int iCritSeedRequests = pWeapon->m_nCritSeedRequests();
-		float flMult = m_bMelee ? 0.5f : Math::RemapValClamped(float(iCritSeedRequests + 1) / (iCritChecks + 1), 0.1f, 1.f, 1.f, 3.f);
-		float flCost = flDamage * TF_DAMAGE_CRIT_MULTIPLIER * flMult;
-		
-		// Update bucket
-		float flNewBucket = m_flLastBucket;
-		if (flNewBucket < flBucketCap)
-			flNewBucket = std::min(flNewBucket + flBaseDamage, flBucketCap);
-		
-		// If we requested a crit, subtract the cost
-		if (m_iPendingRequest == CritRequest_Crit)
-		{
-			flNewBucket -= flCost;
-			pWeapon->m_nCritSeedRequests() = iCritSeedRequests + 1;
-		}
-		
-		// Update crit checks
-		pWeapon->m_nCritChecks() = iCritChecks + 1;
-		pWeapon->m_flCritTokenBucket() = flNewBucket;
-	}
-	
-	// Reset pending state
-	m_bPendingShot = false;
-	m_iPendingRequest = CritRequest_Any;
-}
-
 // Main run function - called from CreateMove
 void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 {
+	// During shifting (doubletap), don't reset forced state - keep using the same forced command
+	// This ensures all shifted ticks use the same crit seed
+	// bRapidFireWantShift is set on the first tick before shifting starts
+	if (!Shifting::bShifting && !Shifting::bRapidFireWantShift)
+	{
+		m_bForcingCrit = false;
+		m_bForcingSkip = false;
+		m_iForcedCommandNumber = 0;
+		m_iForcedSeed = 0;
+	}
+
 	if (!pWeapon || !pLocal || pLocal->deadflag() || !I::EngineClient->IsInGame())
 		return;
-
-	// Apply any pending indicator updates from previous tick
-	ApplyPendingIndicatorUpdate(pWeapon);
-	
-	// Store current state for next tick's comparison
-	m_iLastClip = pWeapon->m_iClip1();
-	int iAmmoType = pWeapon->m_iPrimaryAmmoType();
-	m_iLastAmmo = (iAmmoType >= 0) ? pLocal->GetAmmoCount(iAmmoType) : 0;
-	m_flLastBucket = pWeapon->m_flCritTokenBucket();
-	m_iLastCritChecks = pWeapon->m_nCritChecks();
-	m_iLastCritSeedRequests = pWeapon->m_nCritSeedRequests();
 
 	UpdateInfo(pLocal, pWeapon);
 	
@@ -440,79 +348,50 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 	if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN && pCmd->buttons & IN_ATTACK)
 		pCmd->buttons &= ~IN_ATTACK2;
 	
-	// Determine if we're attacking - matches Amalgam's SDK::IsAttacking logic
-	// The crit is determined when the weapon FIRES, not when you start charging
-	bool bAttacking = false;
-	int nWeaponID = pWeapon->GetWeaponID();
+	// Attack detection - check for doubletap/shifting first (like Amalgam does)
+	// bRapidFireWantShift = first tick when DT is triggered (before shifting starts)
+	// bShifting = during the shifted ticks
+	bool bDoubletap = Shifting::bShifting || Shifting::bRapidFireWantShift;
+	bool bAttacking = bDoubletap;
 	
-	if (m_bMelee)
+	if (!bAttacking)
 	{
-		// For melee, crit is determined when you START the swing (press attack and can attack)
-		// This matches Amalgam's approach
-		bAttacking = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
-		
-		// Fists can also use attack2
-		if (!bAttacking && nWeaponID == TF_WEAPON_FISTS)
-			bAttacking = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK2);
-	}
-	else
-	{
-		// Handle charge weapons specially - they fire when you RELEASE the button
-		switch (nWeaponID)
+		if (m_bMelee)
 		{
-		case TF_WEAPON_PIPEBOMBLAUNCHER:
-		case TF_WEAPON_STICKY_BALL_LAUNCHER:
-		{
-			// Stickies fire when you release attack while charging
-			auto pSticky = pWeapon->As<C_TFPipebombLauncher>();
-			float flChargeBeginTime = pSticky ? pSticky->m_flChargeBeginTime() : 0.f;
-			if (flChargeBeginTime > 0.f)
-			{
-				// Use tickbase time like Amalgam does, not curtime
-				float flTickBase = TICKS_TO_TIME(pLocal->m_nTickBase());
-				float flCharge = flTickBase - flChargeBeginTime;
-				float flMaxCharge = SDKUtils::AttribHookValue(4.f, "stickybomb_charge_rate", pWeapon);
-				float flAmount = Math::RemapValClamped(flCharge, 0.f, flMaxCharge, 0.f, 1.f);
-				// Fire when releasing attack while charged, or when fully charged
-				bAttacking = (!(pCmd->buttons & IN_ATTACK) && flAmount > 0.f) || flAmount >= 1.f;
-			}
-			break;
-		}
-		case TF_WEAPON_COMPOUND_BOW:
-		{
-			// Huntsman fires when you release attack while charging
-			auto pBow = pWeapon->As<C_TFPipebombLauncher>();
-			float flChargeBeginTime = pBow ? pBow->m_flChargeBeginTime() : 0.f;
-			bAttacking = !(pCmd->buttons & IN_ATTACK) && flChargeBeginTime > 0.f;
-			break;
-		}
-		case TF_WEAPON_MINIGUN:
-		{
-			// Minigun: must be spinning and holding attack
-			auto pMinigun = pWeapon->As<C_TFMinigun>();
-			if (pMinigun)
-			{
-				int iState = pMinigun->m_iWeaponState();
-				if ((iState == 2 || iState == 3) && pWeapon->HasPrimaryAmmoForShot()) // AC_STATE_FIRING or AC_STATE_SPINNING
-					bAttacking = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
-			}
-			break;
-		}
-		default:
-			// Standard weapons - fire when pressing attack and can attack
 			bAttacking = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
-			// NOTE: Removed "queued attacks" check - it was causing bucket drain while reloading
-			break;
+			if (!bAttacking && pWeapon->GetWeaponID() == TF_WEAPON_FISTS)
+				bAttacking = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK2);
 		}
-		
-		// Beggar's Bazooka special case
-		if (!bAttacking && (nWeaponID == TF_WEAPON_ROCKETLAUNCHER || nWeaponID == TF_WEAPON_ROCKETLAUNCHER_DIRECTHIT))
+		else if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
 		{
-			if (pWeapon->IsInReload() && G::bCanPrimaryAttack && SDKUtils::AttribHookValue(0.f, "can_overload", pWeapon))
+			// Minigun: check current command for IN_ATTACK (aimbot may have added it)
+			bAttacking = (pCmd->buttons & IN_ATTACK);
+		}
+		else if (pWeapon->GetWeaponID() == TF_WEAPON_FLAMETHROWER)
+		{
+			// Flamethrower: similar to minigun
+			bAttacking = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
+		}
+		else
+		{
+			// For other weapons, use SDK::IsAttacking with current command
+			// This handles all the special cases (charge weapons, etc.)
+			int iAttackResult = SDK::IsAttacking(pLocal, pWeapon, pCmd, false);
+			bAttacking = (iAttackResult > 0);
+			
+			// Beggar's Bazooka special case
+			if (!bAttacking)
 			{
-				int iClip1 = pWeapon->m_iClip1();
-				if (iClip1 > 0)
-					bAttacking = true;
+				int nWeaponID = pWeapon->GetWeaponID();
+				if (nWeaponID == TF_WEAPON_ROCKETLAUNCHER || nWeaponID == TF_WEAPON_ROCKETLAUNCHER_DIRECTHIT)
+				{
+					if (pWeapon->IsInReload() && G::bCanPrimaryAttack && SDKUtils::AttribHookValue(0.f, "can_overload", pWeapon))
+					{
+						int iClip1 = pWeapon->m_iClip1();
+						if (iClip1 > 0)
+							bAttacking = true;
+					}
+				}
 			}
 		}
 	}
@@ -528,70 +407,41 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 	if (iRequest == CritRequest_Any)
 		return;
 
-	// Mark that we're about to fire a shot - this will be processed next tick
-	// to manually update indicator values if the game doesn't update them
-	m_bPendingShot = true;
-	m_iPendingRequest = iRequest;
-
 	// Anti-cheat compatibility mode
-	// In this mode, we don't change the command number - we just block attacks that aren't crits
 	if (CFG::Misc_AntiCheat_Enabled)
 	{
-		// Safe mode: only fire when current command matches our request (crit or non-crit)
+		// Safe mode: only fire when current command matches our request
 		if (!IsCritCommand(pCmd->command_number, pWeapon, iRequest == CritRequest_Crit, false))
 		{
 			pCmd->buttons &= ~IN_ATTACK;
-			G::bSilentAngles = false;
-			m_bPendingShot = false; // Attack was blocked, no pending shot
+			pCmd->viewangles = G::OriginalCmd.viewangles;
+			G::bPSilentAngles = false;
 		}
 	}
 	else
 	{
-		// Normal mode: manipulate command number to force crit/non-crit
-		int iCommand = GetCritCommand(pWeapon, pCmd->command_number, iRequest == CritRequest_Crit);
-		if (iCommand)
+		// During shifting, reuse the already-found forced command for all ticks
+		// This ensures all doubletap shots use the same crit seed
+		if (bDoubletap && m_iForcedCommandNumber != 0)
 		{
-			int iNewSeed = MD5_PseudoRandom(iCommand) & std::numeric_limits<int>::max();
-			
-			// Modify the command passed to us
-			pCmd->command_number = iCommand;
-			pCmd->random_seed = iNewSeed;
-			
-			// Also modify the command in the buffer to ensure the game uses our modified values
-			CUserCmd* pBufferCmd = I::Input->GetUserCmd(G::OriginalCmd.command_number);
-			if (pBufferCmd)
+			pCmd->command_number = m_iForcedCommandNumber;
+			pCmd->random_seed = MD5_PseudoRandom(m_iForcedCommandNumber) & std::numeric_limits<int>::max();
+		}
+		else
+		{
+			// Normal mode: find a command number that will produce crit/non-crit
+			int iCommand = GetCritCommand(pWeapon, pCmd->command_number, iRequest == CritRequest_Crit);
+			if (iCommand)
 			{
-				pBufferCmd->command_number = iCommand;
-				pBufferCmd->random_seed = iNewSeed;
-			}
-			
-			// Reduce bucket when forcing a crit - BUT NOT when skipping crits
-			// Also don't deduct if we can't actually fire (reloading, no ammo, etc.)
-			if (iRequest == CritRequest_Crit)
-			{
-				// Extra check: make sure we can ACTUALLY fire before deducting
-				// This prevents bucket drain when spamming attack while reloading
-				bool bCanActuallyFire = true;
+				pCmd->command_number = iCommand;
+				pCmd->random_seed = MD5_PseudoRandom(iCommand) & std::numeric_limits<int>::max();
 				
-				// Check if weapon has ammo (for non-melee)
-				if (!m_bMelee)
-				{
-					int iClip = pWeapon->m_iClip1();
-					if (iClip == 0)
-						bCanActuallyFire = false;
-					
-					if (pWeapon->IsInReload())
-						bCanActuallyFire = false;
-				}
-				
-				if (bCanActuallyFire)
-				{
-					pWeapon->m_nCritSeedRequests()++;
-					pWeapon->m_flCritTokenBucket() -= m_flCost;
-				}
+				// Store forced state so CalcIsAttackCritical hook can use it
+				m_iForcedCommandNumber = iCommand;
+				m_iForcedSeed = CommandToSeed(iCommand);
+				m_bForcingCrit = (iRequest == CritRequest_Crit);
+				m_bForcingSkip = (iRequest == CritRequest_Skip);
 			}
-			// Note: When iRequest == CritRequest_Skip, we don't deduct from bucket
-			// because we can't guarantee the crit was actually skipped on the client
 		}
 	}
 }
@@ -849,12 +699,8 @@ void CCritHack::Draw()
 		return;
 	}
 	
-	// Check if we should stop suppressing streaming crits
-	if (m_bSuppressStreamingCrits && I::GlobalVars->curtime > m_flSuppressUntil)
-		m_bSuppressStreamingCrits = false;
-	
-	// Streaming crits - but not if we're suppressing (Skip Random Crits blocked a natural crit)
-	if (pWeapon->m_flCritTime() > flTickBase && !m_bSuppressStreamingCrits)
+	// Streaming crits
+	if (pWeapon->m_flCritTime() > flTickBase)
 	{
 		float flTime = pWeapon->m_flCritTime() - flTickBase;
 		H::Draw->String(H::Fonts->Get(EFonts::ESP), x, y, {100, 255, 255, 255}, POS_CENTERXY,

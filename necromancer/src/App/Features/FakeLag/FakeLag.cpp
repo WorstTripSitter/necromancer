@@ -5,20 +5,30 @@
 
 bool CFakeLag::IsAllowed(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 {
-	// Don't fakelag if disabled or already choking too much
-	// When anti-cheat is enabled, max ticks is clamped to 8
-	const int nMaxFakeLagTicks = CFG::Misc_AntiCheat_Enabled ? std::min(CFG::Exploits_FakeLag_Max_Ticks, 8) : CFG::Exploits_FakeLag_Max_Ticks;
-	if (!CFG::Exploits_FakeLag_Enabled 
-		|| I::ClientState->chokedcommands >= nMaxFakeLagTicks
-		|| pLocal->deadflag())
+	// Don't fakelag if disabled or dead
+	if (!CFG::Exploits_FakeLag_Enabled || pLocal->deadflag())
 		return false;
 
-	// Don't fakelag when shifting/recharging or when DT ticks are available (unless ignore DT ticks is enabled)
-	if (!CFG::Exploits_FakeLag_Ignore_DT_Ticks)
-	{
-		if (Shifting::bShifting || Shifting::bRecharging || Shifting::nAvailableTicks > 0)
-			return false;
-	}
+	// Calculate max allowed fakelag ticks based on saved DT ticks
+	// Total budget is ~24 ticks, shared between fakelag and doubletap
+	// When anti-cheat is enabled, max is clamped to 8
+	static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
+	int nMaxTicks = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
+	if (CFG::Misc_AntiCheat_Enabled)
+		nMaxTicks = std::min(nMaxTicks, 8);
+	
+	// Calculate available ticks for fakelag (total budget minus saved DT ticks)
+	int nAvailableForFakelag = nMaxTicks - Shifting::nAvailableTicks;
+	nAvailableForFakelag = std::min(nAvailableForFakelag, 21); // Hard cap at 21
+	nAvailableForFakelag = std::min(nAvailableForFakelag, CFG::Exploits_FakeLag_Max_Ticks); // User config cap
+	
+	// If we've already choked enough, stop
+	if (I::ClientState->chokedcommands >= nAvailableForFakelag)
+		return false;
+
+	// Don't fakelag when actively shifting/recharging
+	if (Shifting::bShifting || Shifting::bRecharging)
+		return false;
 
 	// Don't fakelag during auto rocket jump
 	if (F::Misc->m_bRJDisableFakeLag)
@@ -202,12 +212,8 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 	{
 		// Still respect critical safety checks even in sightline mode
 		
-		// Don't fakelag if disabled or already choked too much
-		// When anti-cheat is enabled, max ticks is clamped to 8
-		const int nMaxFakeLagTicks2 = CFG::Misc_AntiCheat_Enabled ? std::min(CFG::Exploits_FakeLag_Max_Ticks, 8) : CFG::Exploits_FakeLag_Max_Ticks;
-		if (!CFG::Exploits_FakeLag_Enabled 
-			|| I::ClientState->chokedcommands >= nMaxFakeLagTicks2
-			|| pLocal->deadflag())
+		// Don't fakelag if disabled or dead
+		if (!CFG::Exploits_FakeLag_Enabled || pLocal->deadflag())
 		{
 			m_iGoal = 0;
 			m_vLastPosition = pLocal->m_vecOrigin();
@@ -216,17 +222,33 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 			return;
 		}
 		
-		// Don't fakelag when shifting/recharging or when DT ticks are available (unless ignore DT ticks is enabled)
-		if (!CFG::Exploits_FakeLag_Ignore_DT_Ticks)
+		// Calculate max allowed fakelag ticks based on saved DT ticks
+		static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
+		int nMaxTicks = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
+		if (CFG::Misc_AntiCheat_Enabled)
+			nMaxTicks = std::min(nMaxTicks, 8);
+		
+		int nAvailableForFakelag = nMaxTicks - Shifting::nAvailableTicks;
+		nAvailableForFakelag = std::min(nAvailableForFakelag, 21);
+		nAvailableForFakelag = std::min(nAvailableForFakelag, CFG::Exploits_FakeLag_Max_Ticks);
+		
+		if (I::ClientState->chokedcommands >= nAvailableForFakelag)
 		{
-			if (Shifting::bShifting || Shifting::bRecharging || Shifting::nAvailableTicks > 0)
-			{
-				m_iGoal = 0;
-				m_vLastPosition = pLocal->m_vecOrigin();
-				m_bEnabled = false;
-				*pSendPacket = true;
-				return;
-			}
+			m_iGoal = 0;
+			m_vLastPosition = pLocal->m_vecOrigin();
+			m_bEnabled = false;
+			*pSendPacket = true;
+			return;
+		}
+		
+		// Don't fakelag when shifting/recharging
+		if (Shifting::bShifting || Shifting::bRecharging)
+		{
+			m_iGoal = 0;
+			m_vLastPosition = pLocal->m_vecOrigin();
+			m_bEnabled = false;
+			*pSendPacket = true;
+			return;
 		}
 		
 		// Don't fakelag during auto rocket jump
@@ -251,8 +273,8 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 		
 		// Now check for sniper threat
 		int nMinTicks = 3;
-		int nMaxTicks = 8;
-		if (!IsSniperThreat(pLocal, nMinTicks, nMaxTicks))
+		int nMaxTicksSightline = 8;
+		if (!IsSniperThreat(pLocal, nMinTicks, nMaxTicksSightline))
 		{
 			m_iGoal = 0;
 			m_iCurrentChokeTicks = 0;
@@ -268,7 +290,7 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 		// Generate new random target if we've reached the current target or just started
 		if (m_iCurrentChokeTicks >= m_iTargetChokeTicks || m_iTargetChokeTicks == 0)
 		{
-			m_iTargetChokeTicks = nMinTicks + (rand() % (nMaxTicks - nMinTicks + 1));
+			m_iTargetChokeTicks = nMinTicks + (rand() % (nMaxTicksSightline - nMinTicks + 1));
 			m_iCurrentChokeTicks = 0;
 		}
 		

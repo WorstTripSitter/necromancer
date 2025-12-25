@@ -395,11 +395,29 @@ void CMiscVisuals::ShiftBar()
 	{
 		H::Draw->Rect(nBarX - 1, nBarY - 1, nBarW + 2, nBarH + 2, CFG::Menu_Background);
 
-		if (Shifting::nAvailableTicks > 0)
+		// Calculate max ticks budget (shared between DT and fakelag)
+		static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
+		int nMaxTicksBudget = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
+		if (CFG::Misc_AntiCheat_Enabled)
+			nMaxTicksBudget = std::min(nMaxTicksBudget, 8);
+		
+		// Get current usage
+		int nSavedDTTicks = Shifting::nAvailableTicks;
+		int nChokedCommands = I::ClientState->chokedcommands;
+		int nTotalUsed = nSavedDTTicks + nChokedCommands;
+		
+		if (nTotalUsed > 0)
 		{
-			const int nFillWidth = static_cast<int>(Math::RemapValClamped(
-				static_cast<float>(Shifting::nAvailableTicks),
-				0.0f, static_cast<float>(MAX_COMMANDS),
+			// Calculate fill widths based on the actual max budget
+			const int nDTFillWidth = static_cast<int>(Math::RemapValClamped(
+				static_cast<float>(nSavedDTTicks),
+				0.0f, static_cast<float>(nMaxTicksBudget),
+				0.0f, static_cast<float>(nBarW)
+			));
+			
+			const int nChokeFillWidth = static_cast<int>(Math::RemapValClamped(
+				static_cast<float>(nChokedCommands),
+				0.0f, static_cast<float>(nMaxTicksBudget),
 				0.0f, static_cast<float>(nBarW)
 			));
 
@@ -408,69 +426,69 @@ void CMiscVisuals::ShiftBar()
 			{
 				const float rate = CFG::Menu_Accent_Secondary_RGB_Rate;
 				
-				// Draw per-segment rainbow colors
-				for (int i = 0; i < nFillWidth; i++)
+				// Draw DT ticks (rainbow)
+				for (int i = 0; i < nDTFillWidth; i++)
 				{
 					Color_t color = GetRainbowColor(i, rate);
 					const Color_t colorDim = {color.r, color.g, color.b, static_cast<byte>(25 + (230 * i / nBarW))};
 					H::Draw->Line(nBarX + i, nBarY, nBarX + i, nBarY + nBarH - 1, colorDim);
 				}
 				// Outline with rainbow
-				for (int i = 0; i < nFillWidth; i++)
+				for (int i = 0; i < nDTFillWidth; i++)
 				{
 					Color_t color = GetRainbowColor(i, rate);
 					H::Draw->Line(nBarX + i, nBarY, nBarX + i, nBarY, color);
 					H::Draw->Line(nBarX + i, nBarY + nBarH - 1, nBarX + i, nBarY + nBarH - 1, color);
 				}
-				// Left and right edges
-				Color_t leftColor = GetRainbowColor(0, rate);
-				Color_t rightColor = GetRainbowColor(nFillWidth, rate);
-				H::Draw->Line(nBarX, nBarY, nBarX, nBarY + nBarH - 1, leftColor);
-				H::Draw->Line(nBarX + nFillWidth - 1, nBarY, nBarX + nFillWidth - 1, nBarY + nBarH - 1, rightColor);
+				
+				// Draw choked ticks using FakeLag color from config
+				if (nChokedCommands > 0)
+				{
+					const Color_t chokeColor = CFG::Color_FakeLag;
+					const Color_t chokeColorDim = {chokeColor.r, chokeColor.g, chokeColor.b, 100};
+					int nActualChokeWidth = std::min(nChokeFillWidth, nBarW - nDTFillWidth);
+					for (int i = 0; i < nActualChokeWidth; i++)
+					{
+						H::Draw->Line(nBarX + nDTFillWidth + i, nBarY, nBarX + nDTFillWidth + i, nBarY + nBarH - 1, chokeColorDim);
+					}
+					if (nActualChokeWidth > 0)
+						H::Draw->OutlinedRect(nBarX + nDTFillWidth, nBarY, nActualChokeWidth, nBarH, chokeColor);
+				}
+				
+				// Left and right edges for DT portion
+				if (nDTFillWidth > 0)
+				{
+					Color_t leftColor = GetRainbowColor(0, rate);
+					Color_t rightColor = GetRainbowColor(nDTFillWidth, rate);
+					H::Draw->Line(nBarX, nBarY, nBarX, nBarY + nBarH - 1, leftColor);
+					H::Draw->Line(nBarX + nDTFillWidth - 1, nBarY, nBarX + nDTFillWidth - 1, nBarY + nBarH - 1, rightColor);
+				}
 			}
 			else
 			{
 				const Color_t color = F::VisualUtils->GetAccentSecondary();
 				const Color_t colorDim = {color.r, color.g, color.b, 25};
-				H::Draw->GradientRect(nBarX, nBarY, nFillWidth, nBarH, colorDim, color, false);
-				H::Draw->OutlinedRect(nBarX, nBarY, nFillWidth, nBarH, color);
-			}
-		}
-
-		// Draw fakelag status text inside the bar (only if both indicators are enabled)
-		if (CFG::Exploits_Shifting_Draw_Indicator && CFG::Exploits_FakeLag_Indicator)
-		{
-			const int textX = nBarX + CFG::Exploits_Shifting_FakeLag_Text_X;
-			const int textY = nBarY + CFG::Exploits_Shifting_FakeLag_Text_Y;
-			
-			// Use ESP_CONDS for smaller text (50% smaller than ESP_SMALL)
-			// Check if fakelag is actually choking packets (goal > 0 and currently choking)
-			// Use a static variable to smooth out flickering
-			static bool bLastState = false;
-			static int nSameStateCount = 0;
-			
-			const bool bCurrentState = F::FakeLag->m_iGoal > 0 && I::ClientState->chokedcommands > 0;
-			
-			// Only change display after state is stable for 3 frames
-			if (bCurrentState == bLastState)
-				nSameStateCount++;
-			else
-			{
-				nSameStateCount = 0;
-				bLastState = bCurrentState;
-			}
-			
-			static bool bDisplayState = false;
-			if (nSameStateCount >= 3)
-				bDisplayState = bCurrentState;
-			
-			if (bDisplayState)
-			{
-				H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), textX, textY, {46, 204, 113, 255}, POS_DEFAULT, "FAKELAG ON");
-			}
-			else
-			{
-				H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), textX, textY, {231, 76, 60, 255}, POS_DEFAULT, "FAKELAG OFF");
+				
+				// Draw DT ticks
+				if (nDTFillWidth > 0)
+				{
+					H::Draw->GradientRect(nBarX, nBarY, nDTFillWidth, nBarH, colorDim, color, false);
+					H::Draw->OutlinedRect(nBarX, nBarY, nDTFillWidth, nBarH, color);
+				}
+				
+				// Draw choked ticks using FakeLag color from config
+				if (nChokedCommands > 0)
+				{
+					const Color_t chokeColor = CFG::Color_FakeLag;
+					const Color_t chokeColorDim = {chokeColor.r, chokeColor.g, chokeColor.b, 50};
+					int nChokeStartX = nBarX + nDTFillWidth;
+					int nActualChokeWidth = std::min(nChokeFillWidth, nBarW - nDTFillWidth);
+					if (nActualChokeWidth > 0)
+					{
+						H::Draw->GradientRect(nChokeStartX, nBarY, nActualChokeWidth, nBarH, chokeColorDim, chokeColor, false);
+						H::Draw->OutlinedRect(nChokeStartX, nBarY, nActualChokeWidth, nBarH, chokeColor);
+					}
+				}
 			}
 		}
 	}

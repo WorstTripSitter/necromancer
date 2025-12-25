@@ -68,8 +68,6 @@ private:
 	int m_iPotentialCrits = 0;
 	int m_iNextCrit = 0;
 
-
-
 	int m_iEntIndex = 0;
 	bool m_bMelee = false;
 	float m_flCritChance = 0.f;
@@ -77,20 +75,6 @@ private:
 
 	// UI dragging
 	void Drag();
-	
-	// Track when we're suppressing streaming crits (for Skip Random Crits)
-	bool m_bSuppressStreamingCrits = false;
-	float m_flSuppressUntil = 0.f;
-	
-	// Manual indicator tracking for weapons that don't update properly
-	void ApplyPendingIndicatorUpdate(C_TFWeaponBase* pWeapon);
-	bool m_bPendingShot = false;
-	int m_iPendingRequest = CritRequest_Any;
-	int m_iLastClip = 0;
-	int m_iLastAmmo = 0;
-	float m_flLastBucket = 0.f;
-	int m_iLastCritChecks = 0;
-	int m_iLastCritSeedRequests = 0;
 
 public:
 	void Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd);
@@ -106,9 +90,12 @@ public:
 	float GetRangedDamage() { return static_cast<float>(m_iRangedDamage); }
 	bool IsCritBanned() { return m_bCritBanned; }
 	int GetAvailableCrits() { return m_iAvailableCrits; }
-	
-	// Check if we're currently trying to skip crits (for CalcIsAttackCritical hook)
-	bool ShouldSuppressCrit() { return m_bPendingShot && m_iPendingRequest == CritRequest_Skip; }
+
+	// Forced crit state - set by Run(), used by CalcIsAttackCritical hook
+	int m_iForcedCommandNumber = 0;  // The command number we forced (0 = none)
+	int m_iForcedSeed = 0;           // The seed corresponding to forced command
+	bool m_bForcingCrit = false;     // True if we're forcing a crit this tick
+	bool m_bForcingSkip = false;     // True if we're forcing a non-crit (skip)
 };
 
 MAKE_SINGLETON_SCOPED(CCritHack, CritHack, F);

@@ -594,8 +594,6 @@ namespace CFG
 	CFGVAR(Exploits_FakeLag_Enabled, false);
 	CFGVAR(Exploits_FakeLag_Only_Moving, false);
 	CFGVAR(Exploits_FakeLag_Activate_On_Sightline, false);
-	CFGVAR(Exploits_FakeLag_Ignore_DT_Ticks, false);
-	CFGVAR(Exploits_FakeLag_Indicator, false);
 	CFGVAR(Exploits_FakeLag_Max_Ticks, 12);
 
 	CFGVAR(Exploits_Crits_Force_Crit_Key, 0);
@@ -670,6 +668,7 @@ namespace CFG
 	CFGVAR(Color_Simulation_Movement, Color_t({ 255, 255, 255, 255 }));
 	CFGVAR(Color_Simulation_Projectile, Color_t({ 255, 255, 255, 255 }));
 	CFGVAR(Color_Trajectory, Color_t({ 255, 255, 255, 255 })); // Single trajectory color
+	CFGVAR(Color_FakeLag, Color_t({ 255, 165, 0, 255 })); // FakeLag indicator color (orange)
 
 	CFGVAR_NOSAVE(Color_ESP_Text, Color_t({ 200, 200, 200, 255 }));
 	CFGVAR_NOSAVE(Color_ESP_Outline, Color_t({ 10, 10, 10, 255 }));
