@@ -2,6 +2,7 @@
 
 #include "../../CFG.h"
 #include "../../amalgam_port/Simulation/MovementSimulation/AmalgamMoveSim.h"
+#include "../../Crits/Crits.h"
 
 int CAimbotMelee::GetSwingTime(C_TFWeaponBase* pWeapon)
 {

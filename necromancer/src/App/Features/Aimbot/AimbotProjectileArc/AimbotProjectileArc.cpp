@@ -5,6 +5,7 @@
 #include "../../VisualUtils/VisualUtils.h"
 #include "../../CFG.h"
 #include "../../../../SDK/Impl/TraceFilters/TraceFilters.h"
+#include "../../Crits/Crits.h"
 
 // Use Amalgam's simulations and compatibility layer
 #include "../../amalgam_port/Simulation/ProjectileSimulation/ProjectileSimulation.h"

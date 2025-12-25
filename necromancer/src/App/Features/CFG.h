@@ -391,6 +391,8 @@ namespace CFG
 	CFGVAR(Visuals_Crit_Indicator, false);
 	CFGVAR(Visuals_Crit_Indicator_Pos_X, 801);
 	CFGVAR(Visuals_Crit_Indicator_Pos_Y, 652);
+	CFGVAR(Visuals_Crit_Indicator_Width, 140);
+	CFGVAR(Visuals_Crit_Indicator_Height, 16);
 	CFGVAR(Visuals_Crit_Indicator_Debug, false);
 	CFGVAR(Visuals_Draw_Movement_Path_Style, 1); //0 Off 1 Line 2 Separators 3 Spaced 4 Arrows 5 Boxes (Amalgam-style)
 	

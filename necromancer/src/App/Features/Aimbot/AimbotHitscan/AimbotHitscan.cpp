@@ -5,6 +5,7 @@
 #include "../../ShotgunDamagePrediction/SmartShotgunAimbot.h"
 #include "../../FakeLagFix/FakeLagFix.h"
 #include "../../Menu/Menu.h"
+#include "../../Crits/Crits.h"
 #include <algorithm>
 
 // Check if weapon is a sniper rifle or ambassador (can headshot)

@@ -344,9 +344,8 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 	if (pLocal->IsCritBoosted() || pWeapon->m_flCritTime() > I::GlobalVars->curtime || !WeaponCanCrit(pWeapon))
 		return;
 
-	// Handle minigun special case
-	if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN && pCmd->buttons & IN_ATTACK)
-		pCmd->buttons &= ~IN_ATTACK2;
+	// NOTE: Minigun IN_ATTACK2 removal moved to after safe mode check
+	// so we don't unrev the minigun when waiting for a crit
 	
 	// Attack detection - check for doubletap/shifting first (like Amalgam does)
 	// bRapidFireWantShift = first tick when DT is triggered (before shifting starts)
@@ -407,15 +406,27 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 	if (iRequest == CritRequest_Any)
 		return;
 
-	// Anti-cheat compatibility mode
-	if (CFG::Misc_AntiCheat_Enabled)
+	// Anti-cheat compatibility mode (skip if crit detection bypass is enabled)
+	if (CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_SkipCritDetection)
 	{
 		// Safe mode: only fire when current command matches our request
 		if (!IsCritCommand(pCmd->command_number, pWeapon, iRequest == CritRequest_Crit, false))
 		{
+			// Block the attack - but preserve minigun rev state
 			pCmd->buttons &= ~IN_ATTACK;
-			pCmd->viewangles = G::OriginalCmd.viewangles;
+			
+			// For minigun: restore IN_ATTACK2 so it stays revved while waiting
+			if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+			{
+				// Check if player was holding attack2 (rev) before we modified buttons
+				if (G::OriginalCmd.buttons & IN_ATTACK2)
+					pCmd->buttons |= IN_ATTACK2;
+			}
+			
+			// DON'T reset viewangles - keep aimbot angles so they're ready when crit comes
+			// Only reset psilent flag since we're not actually firing
 			G::bPSilentAngles = false;
+			return; // Don't proceed to minigun button handling below
 		}
 	}
 	else
@@ -444,6 +455,49 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 			}
 		}
 	}
+	
+	// Handle minigun special case - only remove IN_ATTACK2 when we're actually firing
+	// This prevents both buttons being pressed at once which causes issues
+	if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN && (pCmd->buttons & IN_ATTACK))
+		pCmd->buttons &= ~IN_ATTACK2;
+}
+
+// Check if aimbot should fire - returns false if safe mode would block the shot
+// Aimbots should call this BEFORE adding IN_ATTACK
+bool CCritHack::ShouldAllowFire(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
+{
+	// If safe mode is not enabled, always allow
+	if (!CFG::Misc_AntiCheat_Enabled || CFG::Misc_AntiCheat_SkipCritDetection)
+		return true;
+	
+	// If no weapon or player, allow (let other code handle it)
+	if (!pWeapon || !pLocal || pLocal->deadflag())
+		return true;
+	
+	// If weapon can't crit, allow
+	if (!WeaponCanCrit(pWeapon))
+		return true;
+	
+	// If crit boosted or streaming, allow
+	if (pLocal->IsCritBoosted() || pWeapon->m_flCritTime() > I::GlobalVars->curtime)
+		return true;
+	
+	// Rapid fire cooldown check
+	if (pWeapon->IsRapidFire() && I::GlobalVars->curtime < pWeapon->m_flLastRapidFireCritCheckTime() + 1.f)
+		return true;
+	
+	// Update info for accurate crit checking
+	UpdateInfo(pLocal, pWeapon);
+	
+	// Get what we want (crit or skip)
+	int iRequest = GetCritRequest(pCmd, pWeapon);
+	
+	// If we don't care about crits, allow
+	if (iRequest == CritRequest_Any)
+		return true;
+	
+	// Check if current command matches our request
+	return IsCritCommand(pCmd->command_number, pWeapon, iRequest == CritRequest_Crit, false);
 }
 
 // Predict command number for projectile simulation
@@ -634,9 +688,9 @@ void CCritHack::Drag()
 	const int x = CFG::Visuals_Crit_Indicator_Pos_X;
 	const int y = CFG::Visuals_Crit_Indicator_Pos_Y;
 	
-	// Hitbox matches the indicator size (x,y is top-left now)
-	const int nWidth = 140;
-	const int nHeight = 50;  // Approximate total height
+	// Hitbox matches the indicator size (uses config values)
+	const int nWidth = CFG::Visuals_Crit_Indicator_Width;
+	const int nHeight = CFG::Visuals_Crit_Indicator_Height + 40;  // Bar height + text rows
 	const bool bHovered = nMouseX >= x && nMouseX <= x + nWidth && nMouseY >= y && nMouseY <= y + nHeight;
 	
 	if (bHovered && H::Input->IsPressed(VK_LBUTTON))
@@ -677,9 +731,9 @@ void CCritHack::Draw()
 	const int x = CFG::Visuals_Crit_Indicator_Pos_X;
 	const int y = CFG::Visuals_Crit_Indicator_Pos_Y;
 	
-	// Layout dimensions - bar is half length, 55% taller
-	const int nWidth = 140;  // Half of original 280
-	const int nBarHeight = 16;  // 55% taller than 10
+	// Layout dimensions - configurable via sliders
+	const int nWidth = CFG::Visuals_Crit_Indicator_Width;
+	const int nBarHeight = CFG::Visuals_Crit_Indicator_Height;
 	const int nPadding = 6;
 	const int nRowHeight = 12;  // Smaller row height for smaller text
 	
@@ -710,7 +764,7 @@ void CCritHack::Draw()
 	int nBoxX = x;
 	int nBoxY = y;
 	
-	// Special states - compact single-line display (no background)
+	// Special states - compact single-line display (no background/outline)
 	if (!WeaponCanCrit(pWeapon, true))
 	{
 		H::Draw->String(font, nBoxX + nWidth / 2, nBoxY + nPadding + nRowHeight / 2, {150, 150, 150, 255}, POS_CENTERXY, "NO CRITS");
@@ -719,7 +773,6 @@ void CCritHack::Draw()
 	
 	if (pLocal->IsCritBoosted())
 	{
-		H::Draw->OutlinedRect(nBoxX, nBoxY, nWidth, nRowHeight + nPadding * 2, clrOutline);
 		H::Draw->String(font, nBoxX + nWidth / 2, nBoxY + nPadding + nRowHeight / 2, clrTextCyan, POS_CENTERXY, "CRIT BOOSTED");
 		return;
 	}
@@ -727,7 +780,6 @@ void CCritHack::Draw()
 	if (pWeapon->m_flCritTime() > flTickBase)
 	{
 		float flTime = pWeapon->m_flCritTime() - flTickBase;
-		H::Draw->OutlinedRect(nBoxX, nBoxY, nWidth, nRowHeight + nPadding * 2, clrOutline);
 		H::Draw->String(font, nBoxX + nWidth / 2, nBoxY + nPadding + nRowHeight / 2, clrTextCyan, POS_CENTERXY, 
 			std::format("STREAMING {:.1f}s", flTime).c_str());
 		return;
@@ -737,6 +789,13 @@ void CCritHack::Draw()
 	int nBarEndX = nBoxX + nWidth - nPadding;  // Right edge of the bar
 	int nTextRightX = nBarEndX - 20;  // Offset for right-aligned text (text center point)
 	int nDrawY = nBoxY;
+	
+	// === ROW 0: SAFE MODE (centered, only when anticheat is on and skip crit detection is off) ===
+	if (CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_SkipCritDetection)
+	{
+		H::Draw->String(font, nBoxX + nWidth / 2, nDrawY, clrTextYellow, POS_CENTERX, "SAFE MODE");
+		nDrawY += nRowHeight;
+	}
 	
 	// === ROW 1: CRITS (left) and STATUS (right-aligned to bar end) ===
 	int iCrits = m_iAvailableCrits;

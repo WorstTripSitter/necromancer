@@ -359,12 +359,7 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 
 	F::RapidFire->Run(pCmd, pSendPacket);
 
-	// Anti-Cheat Compatibility - process command history and apply protections
-	// IMPORTANT: Run BEFORE pSilent restoration so it sees the actual angles being sent to server
-	F::AntiCheatCompat->ProcessCommand(pCmd, pSendPacket);
-
-	//pSilent - restore angles AFTER anti-cheat has processed them
-	// This way anti-cheat sees the silent aim angles, but player's view is restored
+	//pSilent - choke on attack frame, restore on next frame
 	{
 		static bool bWasSet = false;
 
@@ -373,11 +368,9 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 			*pSendPacket = false;
 			bWasSet = true;
 		}
-
 		else
 		{
 			// Don't restore angles if regular silent angles are active (e.g., rocket jump)
-			// This prevents pSilent restoration from overwriting rocket jump angles
 			if (bWasSet && !G::bSilentAngles)
 			{
 				*pSendPacket = true;
@@ -388,11 +381,15 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 			}
 			else if (bWasSet && G::bSilentAngles)
 			{
-				// Silent angles are active, just reset the flag without restoring
 				bWasSet = false;
 			}
 		}
 	}
+
+	// Anti-Cheat Compatibility - process command history and apply protections
+	// IMPORTANT: Run AFTER pSilent restoration so it sees the FINAL angles being sent to server
+	// This allows it to detect and fix the snap pattern after angles are restored
+	F::AntiCheatCompat->ProcessCommand(pCmd, pSendPacket);
 
 	G::nOldButtons = pCmd->buttons;
 	G::vUserCmdAngles = pCmd->viewangles;

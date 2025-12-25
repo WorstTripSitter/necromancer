@@ -90,6 +90,10 @@ public:
 
 	bool WeaponCanCrit(C_TFWeaponBase* pWeapon, bool bWeaponOnly = false);
 	int PredictCmdNum(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd);
+	
+	// Safe mode check - returns true if aimbot should fire, false if it should wait
+	// Call this BEFORE adding IN_ATTACK to check if safe mode would block the shot
+	bool ShouldAllowFire(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd);
 
 	// Getters for external use
 	float GetCritDamage() { return static_cast<float>(m_iCritDamage); }

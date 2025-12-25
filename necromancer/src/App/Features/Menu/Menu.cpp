@@ -3235,9 +3235,14 @@ void CMenu::MainWindow()
 		m_mapGroupBoxes["Exploits_Crithack"].m_fnRenderContent = [this]() {
 			InputKey("Key", CFG::Exploits_Crits_Force_Crit_Key);
 			InputKey("Melee Key", CFG::Exploits_Crits_Force_Crit_Key_Melee);
-			CheckBox("Ignore Crit Ban", CFG::Exploits_Crits_Ignore_Ban);
+			CheckBox("Skip Random Crits", CFG::Exploits_Crits_Skip_Random_Crits);
 			CheckBox("Crit Indicator", CFG::Visuals_Crit_Indicator);
-			CheckBox("Indicator Debug", CFG::Visuals_Crit_Indicator_Debug);
+			if (CFG::Visuals_Crit_Indicator)
+			{
+				SliderInt("Bar Width", CFG::Visuals_Crit_Indicator_Width, 100, 300, 10);
+				SliderInt("Bar Height", CFG::Visuals_Crit_Indicator_Height, 8, 32, 2);
+				CheckBox("Indicator Debug", CFG::Visuals_Crit_Indicator_Debug);
+			}
 		};
 
 		m_mapGroupBoxes["Exploits_No Spread"].m_fnRenderContent = [this]() {

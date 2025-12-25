@@ -1,6 +1,7 @@
 #include "RapidFire.h"
 
 #include "../CFG.h"
+#include "../Crits/Crits.h"
 
 bool IsRapidFireWeapon(C_TFWeaponBase* pWeapon)
 {
@@ -42,6 +43,11 @@ bool CRapidFire::ShouldStart(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon)
 		if (!(pLocal->m_fFlags() & FL_ONGROUND))
 			return false; // Airborne - don't use DT
 	}
+
+	// Don't start doubletap if safe mode is waiting for a crit
+	// This prevents wasting DT ticks while waiting for a crit command
+	if (!F::CritHack->ShouldAllowFire(pLocal, pWeapon, G::CurrentUserCmd))
+		return false;
 
 	return true;
 }
