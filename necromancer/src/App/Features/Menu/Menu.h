@@ -5,6 +5,7 @@
 
 // Draggable GroupBox system
 enum class EGroupBoxColumn { LEFT = 0, MIDDLE = 1, RIGHT = 2 };
+enum class EGroupBoxSize { EXTRA_SMALL = 0, SMALL = 1, MEDIUM = 2, BIG = 3 };
 
 struct DraggableGroupBox_t
 {
@@ -16,6 +17,7 @@ struct DraggableGroupBox_t
 	int m_nHeight;                // Calculated height after rendering
 	int m_nRenderX;               // Last rendered X position
 	int m_nRenderY;               // Last rendered Y position
+	EGroupBoxSize m_eSize;        // Size category for column placement rules
 	std::function<void()> m_fnRenderContent; // Function to render the content
 };
 
@@ -76,7 +78,7 @@ private:
 	void GroupBoxEnd();
 
 	// Draggable GroupBox methods
-	void RegisterGroupBox(const std::string& szTab, const std::string& szLabel, EGroupBoxColumn nDefaultColumn, int nOrder, int nWidth);
+	void RegisterGroupBox(const std::string& szTab, const std::string& szLabel, EGroupBoxColumn nDefaultColumn, int nOrder, int nWidth, EGroupBoxSize eSize = EGroupBoxSize::SMALL);
 	void RenderDraggableGroupBoxes(const std::string& szTab, int nContentX, int nContentY, int nContentW, int nContentH);
 	void RenderDropZones(int nContentX, int nContentY, int nContentW, int nContentH);
 	void HandleGroupBoxDrag();

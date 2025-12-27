@@ -434,6 +434,7 @@
     <ClCompile Include="src\App\Hooks\CTFPlayer_BRenderAsZombie.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPlayer_UpdateClientSideAnimation.cpp" />
     <ClCompile Include="src\App\Hooks\CTFRagdoll_CreateTFRagdoll.cpp" />
+    <ClCompile Include="src\App\Hooks\DataTable_Warning.cpp" />
     <ClCompile Include="src\App\Hooks\DoEnginePostProcessing.cpp" />
     <ClCompile Include="src\App\Hooks\FX_FireBullets.cpp" />
     <ClCompile Include="src\App\Hooks\GetClientInterpAmount.cpp" />

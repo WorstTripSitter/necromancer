@@ -2659,20 +2659,30 @@ void CMenu::MainWindow()
 					{ "Plastic", 5 }
 					});
 
-				SelectSingle("Lag Records Style", CFG::Materials_Players_LagRecords_Style, {
-					{ "All", 0 },
-					{ "Last Only", 1 }
-					});
-
 				multiselect("Ignore", PlayerIgnore, {
 					{ "Local", CFG::Materials_Players_Ignore_Local },
 					{ "Friends", CFG::Materials_Players_Ignore_Friends },
 					{ "Enemies", CFG::Materials_Players_Ignore_Enemies },
-					{ "Teammates", CFG::Materials_Players_Ignore_Teammates },
-					{ "Lag Records", CFG::Materials_Players_Ignore_LagRecords }
+					{ "Teammates", CFG::Materials_Players_Ignore_Teammates }
 					});
 
 				CheckBox("Show Team Medics", CFG::Materials_Players_Show_Teammate_Medics);
+			}
+			GroupBoxEnd();
+
+			// Fake Model group box (under Players)
+			GroupBoxStart("Fake Model", 150);
+			{
+				CheckBox("Active", CFG::Materials_FakeModel_Active);
+				SliderFloat("Alpha", CFG::Materials_FakeModel_Alpha, 0.0f, 1.0f, 0.1f, "%.1f");
+				SelectSingle("Material", CFG::Materials_FakeModel_Material, {
+					{ "Original", 0 },
+					{ "Flat", 1 },
+					{ "Shaded", 2 },
+					{ "Glossy", 3 },
+					{ "Glow", 4 },
+					{ "Plastic", 5 }
+					});
 			}
 			GroupBoxEnd();
 
@@ -2701,6 +2711,26 @@ void CMenu::MainWindow()
 					});
 
 				CheckBox("Show Team Dispensers", CFG::Materials_Buildings_Show_Teammate_Dispensers);
+			}
+			GroupBoxEnd();
+
+			// Lag Records group box (under Buildings)
+			GroupBoxStart("Lag Records", 150);
+			{
+				CheckBox("Active", CFG::Materials_LagRecords_Active);
+				SliderFloat("Alpha", CFG::Materials_LagRecords_Alpha, 0.0f, 1.0f, 0.1f, "%.1f");
+				SelectSingle("Material", CFG::Materials_LagRecords_Material, {
+					{ "Original", 0 },
+					{ "Flat", 1 },
+					{ "Shaded", 2 },
+					{ "Glossy", 3 },
+					{ "Glow", 4 },
+					{ "Plastic", 5 }
+					});
+				SelectSingle("Style", CFG::Materials_LagRecords_Style, {
+					{ "All", 0 },
+					{ "Last Only", 1 }
+					});
 			}
 			GroupBoxEnd();
 		}
@@ -3140,6 +3170,8 @@ void CMenu::MainWindow()
 				ColorPicker("Projectile Sim", CFG::Color_Simulation_Projectile);
 				ColorPicker("Trajectory", CFG::Color_Trajectory);
 				ColorPicker("FakeLag", CFG::Color_FakeLag);
+				ColorPicker("Fake Model", CFG::Color_FakeModel);
+				ColorPicker("Lag Record", CFG::Color_LagRecord);
 			}
 			GroupBoxEnd();
 
@@ -3190,12 +3222,13 @@ void CMenu::MainWindow()
 			auto [col5, ord5] = LoadGroupBoxPosition(CFG::Menu_GroupBox_Exploits_RegionSelector);
 			auto [col6, ord6] = LoadGroupBoxPosition(CFG::Menu_GroupBox_Exploits_AntiAim);
 
-			RegisterGroupBox("Exploits", "Shifting", col1, ord1, 150);
-			RegisterGroupBox("Exploits", "FakeLag", col2, ord2, 150);
-			RegisterGroupBox("Exploits", "AntiAim", col6, ord6, 380);
-			RegisterGroupBox("Exploits", "Crithack", col3, ord3, 150);
-			RegisterGroupBox("Exploits", "No Spread", col4, ord4, 150);
-			RegisterGroupBox("Exploits", "Region Selector", col5, ord5, 150);
+			// Sizes: Shifting=Medium, FakeLag=Small, Crithack=Small, NoSpread=ExtraSmall, RegionSelector=Medium, AntiAim=Big
+			RegisterGroupBox("Exploits", "Shifting", col1, ord1, 150, EGroupBoxSize::MEDIUM);
+			RegisterGroupBox("Exploits", "FakeLag", col2, ord2, 150, EGroupBoxSize::SMALL);
+			RegisterGroupBox("Exploits", "AntiAim", col6, ord6, 145, EGroupBoxSize::BIG);
+			RegisterGroupBox("Exploits", "Crithack", col3, ord3, 150, EGroupBoxSize::SMALL);
+			RegisterGroupBox("Exploits", "No Spread", col4, ord4, 150, EGroupBoxSize::EXTRA_SMALL);
+			RegisterGroupBox("Exploits", "Region Selector", col5, ord5, 150, EGroupBoxSize::MEDIUM);
 			bExploitsInitialized = true;
 		}
 		
@@ -3318,7 +3351,6 @@ void CMenu::MainWindow()
 			CheckBox("Min Walk", CFG::Exploits_AntiAim_MinWalk);
 			CheckBox("Anti-Overlap", CFG::Exploits_AntiAim_AntiOverlap);
 			CheckBox("Hide Pitch on Shot", CFG::Exploits_AntiAim_InvalidShootPitch);
-			CheckBox("Draw Fake Model", CFG::Exploits_AntiAim_DrawFakeModel);
 		};
 
 		m_mapGroupBoxes["Exploits_Crithack"].m_fnRenderContent = [this]() {
@@ -4798,7 +4830,7 @@ CMenu::CMenu()
 // Draggable GroupBox System Implementation
 // ============================================
 
-void CMenu::RegisterGroupBox(const std::string& szTab, const std::string& szLabel, EGroupBoxColumn nDefaultColumn, int nOrder, int nWidth)
+void CMenu::RegisterGroupBox(const std::string& szTab, const std::string& szLabel, EGroupBoxColumn nDefaultColumn, int nOrder, int nWidth, EGroupBoxSize eSize)
 {
 	std::string szId = szTab + "_" + szLabel;
 	
@@ -4813,6 +4845,7 @@ void CMenu::RegisterGroupBox(const std::string& szTab, const std::string& szLabe
 		gb.m_nHeight = 0;
 		gb.m_nRenderX = 0;
 		gb.m_nRenderY = 0;
+		gb.m_eSize = eSize;
 		m_mapGroupBoxes[szId] = gb;
 	}
 }
@@ -4880,74 +4913,141 @@ void CMenu::HandleGroupBoxDrag()
 			EGroupBoxColumn oldColumn = gb.m_nColumn;
 			EGroupBoxColumn targetColumn = m_nHoveredDropColumn;
 			
-			// New rules for Misc tab groupbox placement:
-			// Big sections: Game, Auto, Movement, Taunt, Misc
-			// Small sections: Chat, Mann vs. Machine
-			// Max per column: 3 big + 1 small, OR 2 big + 2 small
-			
-			auto isBigSection = [](const std::string& id) -> bool {
-				return id == "Misc_Game" || id == "Misc_Auto" || id == "Misc_Movement" || 
-				       id == "Misc_Taunt" || id == "Misc_Misc";
-			};
-			
-			auto isSmallSection = [](const std::string& id) -> bool {
-				return id == "Misc_Chat" || id == "Misc_Mann vs. Machine";
-			};
-			
-			// Extra large sections - can't have all 3 in same column
-			auto isExtraLargeSection = [](const std::string& id) -> bool {
-				return id == "Misc_Misc" || id == "Misc_Auto" || id == "Misc_Movement";
-			};
-			
-			// Count big, small, and extra large sections in target column (excluding the dragged one)
-			int nBigInTarget = 0;
-			int nSmallInTarget = 0;
-			int nExtraLargeInTarget = 0;
-			for (auto& pair : m_mapGroupBoxes)
-			{
-				if (pair.first != m_strDraggingGroupBox && 
-				    pair.second.m_szId.find("Misc_") == 0 && 
-				    pair.second.m_nColumn == targetColumn)
-				{
-					if (isBigSection(pair.first))
-						nBigInTarget++;
-					if (isSmallSection(pair.first))
-						nSmallInTarget++;
-					if (isExtraLargeSection(pair.first))
-						nExtraLargeInTarget++;
-				}
-			}
-			
-			// Check if adding this box would exceed limits
-			bool bDraggedIsBig = isBigSection(m_strDraggingGroupBox);
-			bool bDraggedIsSmall = isSmallSection(m_strDraggingGroupBox);
-			bool bDraggedIsExtraLarge = isExtraLargeSection(m_strDraggingGroupBox);
-			
-			int nNewBig = nBigInTarget + (bDraggedIsBig ? 1 : 0);
-			int nNewSmall = nSmallInTarget + (bDraggedIsSmall ? 1 : 0);
-			int nNewExtraLarge = nExtraLargeInTarget + (bDraggedIsExtraLarge ? 1 : 0);
-			
-			// Valid combinations per column:
-			// - Max 3 big + 1 small
-			// - OR 2 big + 2 small
-			// - BUT can't have all 3 extra large (Misc, Auto, Movement) in same column
-			bool bValidPlacement = false;
-			if (nNewBig <= 3 && nNewSmall <= 1)
-				bValidPlacement = true;
-			else if (nNewBig <= 2 && nNewSmall <= 2)
-				bValidPlacement = true;
-			
-			// Extra constraint: Misc, Auto, Movement can't all be in same column
-			if (nNewExtraLarge >= 3)
-				bValidPlacement = false;
-			
-			if (!bValidPlacement)
-			{
-				targetColumn = oldColumn;
-			}
-			
 			// Find the tab name
 			std::string szTab = m_strDraggingGroupBox.substr(0, m_strDraggingGroupBox.find('_'));
+			
+			// Validation for Exploits tab using size categories
+			// Rules:
+			// - 1 big + 1 medium + 1 extrasmall allowed in 1 lane
+			// - 1 big + 1 extrasmall + 2 small allowed in 1 lane
+			// - 2 medium + 2 small + 1 extrasmall allowed in 1 lane (can swap 1 extrasmall for 1 small = 2 medium + 3 small)
+			if (szTab == "Exploits")
+			{
+				// Count sizes in target column (excluding the dragged one)
+				int nBigInTarget = 0;
+				int nMediumInTarget = 0;
+				int nSmallInTarget = 0;
+				int nExtraSmallInTarget = 0;
+				
+				for (auto& pair : m_mapGroupBoxes)
+				{
+					if (pair.first != m_strDraggingGroupBox && 
+					    pair.second.m_szId.find("Exploits_") == 0 && 
+					    pair.second.m_nColumn == targetColumn)
+					{
+						switch (pair.second.m_eSize)
+						{
+							case EGroupBoxSize::BIG: nBigInTarget++; break;
+							case EGroupBoxSize::MEDIUM: nMediumInTarget++; break;
+							case EGroupBoxSize::SMALL: nSmallInTarget++; break;
+							case EGroupBoxSize::EXTRA_SMALL: nExtraSmallInTarget++; break;
+						}
+					}
+				}
+				
+				// Add the dragged box counts
+				int nNewBig = nBigInTarget + (gb.m_eSize == EGroupBoxSize::BIG ? 1 : 0);
+				int nNewMedium = nMediumInTarget + (gb.m_eSize == EGroupBoxSize::MEDIUM ? 1 : 0);
+				int nNewSmall = nSmallInTarget + (gb.m_eSize == EGroupBoxSize::SMALL ? 1 : 0);
+				int nNewExtraSmall = nExtraSmallInTarget + (gb.m_eSize == EGroupBoxSize::EXTRA_SMALL ? 1 : 0);
+				
+				// Check valid combinations:
+				// 1. 1 big + 1 medium + 1 extrasmall
+				// 2. 1 big + 1 extrasmall + 2 small
+				// 3. 2 medium + 1 small + 1 extrasmall (or 2 medium + 2 small with no extrasmall)
+				bool bValidPlacement = false;
+				
+				// Rule 1: 1 big + 1 medium + 1 extrasmall (no small)
+				if (nNewBig == 1 && nNewMedium <= 1 && nNewSmall == 0 && nNewExtraSmall <= 1)
+					bValidPlacement = true;
+				
+				// Rule 2: 1 big + 1 extrasmall + up to 2 small (no medium)
+				if (nNewBig == 1 && nNewMedium == 0 && nNewSmall <= 2 && nNewExtraSmall <= 1)
+					bValidPlacement = true;
+				
+				// Rule 3: 2 medium + 1 small + 1 extrasmall (no big)
+				if (nNewBig == 0 && nNewMedium <= 2 && nNewSmall <= 1 && nNewExtraSmall <= 1)
+					bValidPlacement = true;
+				
+				// Rule 3 variant: 2 medium + 1 small (no big, no extrasmall)
+				if (nNewBig == 0 && nNewMedium <= 2 && nNewSmall <= 1 && nNewExtraSmall == 0)
+					bValidPlacement = true;
+				
+				// Also allow empty or single-item columns
+				int totalInColumn = nNewBig + nNewMedium + nNewSmall + nNewExtraSmall;
+				if (totalInColumn <= 1)
+					bValidPlacement = true;
+				
+				if (!bValidPlacement)
+					targetColumn = oldColumn;
+			}
+			// Validation for Misc tab
+			else if (szTab == "Misc")
+			{
+				// New rules for Misc tab groupbox placement:
+				// Big sections: Game, Auto, Movement, Taunt, Misc
+				// Small sections: Chat, Mann vs. Machine
+				// Max per column: 3 big + 1 small, OR 2 big + 2 small
+				
+				auto isBigSection = [](const std::string& id) -> bool {
+					return id == "Misc_Game" || id == "Misc_Auto" || id == "Misc_Movement" || 
+					       id == "Misc_Taunt" || id == "Misc_Misc" || id == "Misc_Chat";
+				};
+				
+				auto isSmallSection = [](const std::string& id) -> bool {
+					return id == "Misc_Mann vs. Machine";
+				};
+				
+				// Extra large sections - can't have all 3 in same column
+				auto isExtraLargeSection = [](const std::string& id) -> bool {
+					return id == "Misc_Misc" || id == "Misc_Auto" || id == "Misc_Movement";
+				};
+				
+				// Count big, small, and extra large sections in target column (excluding the dragged one)
+				int nBigInTarget = 0;
+				int nSmallInTarget = 0;
+				int nExtraLargeInTarget = 0;
+				for (auto& pair : m_mapGroupBoxes)
+				{
+					if (pair.first != m_strDraggingGroupBox && 
+					    pair.second.m_szId.find("Misc_") == 0 && 
+					    pair.second.m_nColumn == targetColumn)
+					{
+						if (isBigSection(pair.first))
+							nBigInTarget++;
+						if (isSmallSection(pair.first))
+							nSmallInTarget++;
+						if (isExtraLargeSection(pair.first))
+							nExtraLargeInTarget++;
+					}
+				}
+				
+				// Check if adding this box would exceed limits
+				bool bDraggedIsBig = isBigSection(m_strDraggingGroupBox);
+				bool bDraggedIsSmall = isSmallSection(m_strDraggingGroupBox);
+				bool bDraggedIsExtraLarge = isExtraLargeSection(m_strDraggingGroupBox);
+				
+				int nNewBig = nBigInTarget + (bDraggedIsBig ? 1 : 0);
+				int nNewSmall = nSmallInTarget + (bDraggedIsSmall ? 1 : 0);
+				int nNewExtraLarge = nExtraLargeInTarget + (bDraggedIsExtraLarge ? 1 : 0);
+				
+				// Valid combinations per column:
+				// - Max 3 big + 1 small
+				// - OR 2 big + 2 small
+				// - BUT can't have all 3 extra large (Misc, Auto, Movement) in same column
+				bool bValidPlacement = false;
+				if (nNewBig <= 3 && nNewSmall <= 1)
+					bValidPlacement = true;
+				else if (nNewBig <= 2 && nNewSmall <= 2)
+					bValidPlacement = true;
+				
+				// Extra constraint: Misc, Auto, Movement can't all be in same column
+				if (nNewExtraLarge >= 3)
+					bValidPlacement = false;
+				
+				if (!bValidPlacement)
+					targetColumn = oldColumn;
+			}
 			
 			// Assign order based on mouse Y position
 			int my = H::Input->GetMouseY();
@@ -5039,6 +5139,7 @@ void CMenu::HandleGroupBoxDrag()
 				else if (id == "Misc_Movement") CFG::Menu_GroupBox_Misc_Movement = configValue;
 				else if (id == "Exploits_Shifting") CFG::Menu_GroupBox_Exploits_Shifting = configValue;
 				else if (id == "Exploits_FakeLag") CFG::Menu_GroupBox_Exploits_FakeLag = configValue;
+				else if (id == "Exploits_AntiAim") CFG::Menu_GroupBox_Exploits_AntiAim = configValue;
 				else if (id == "Exploits_Crithack") CFG::Menu_GroupBox_Exploits_Crits = configValue;
 				else if (id == "Exploits_No Spread") CFG::Menu_GroupBox_Exploits_NoSpread = configValue;
 				else if (id == "Exploits_Region Selector") CFG::Menu_GroupBox_Exploits_RegionSelector = configValue;

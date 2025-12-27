@@ -281,7 +281,7 @@ void CMaterials::RunLagRecords()
 {
 	const auto pRenderContext = I::MaterialSystem->GetRenderContext();
 
-	if (!pRenderContext || !CFG::Materials_Players_Active || CFG::Materials_Players_Ignore_LagRecords)
+	if (!pRenderContext || !CFG::Materials_LagRecords_Active)
 		return;
 
 	const auto pLocal = H::Entities->GetLocal();
@@ -317,11 +317,33 @@ void CMaterials::RunLagRecords()
 		return;
 	}
 
-	m_bRenderingOriginalMat = false;
+	// Get material based on setting
+	auto GetMaterial = [&](int nIndex) -> IMaterial* {
+		switch (nIndex)
+		{
+		case 0: return nullptr;
+		case 1: return m_pFlat;
+		case 2: return m_pShaded;
+		case 3: return m_pGlossy;
+		case 4: return m_pGlow;
+		case 5: return m_pPlastic;
+		default: return m_pFlat;
+		}
+	};
 
-	I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+	m_bRenderingOriginalMat = CFG::Materials_LagRecords_Material == 0;
 
-	I::ModelRender->ForcedMaterialOverride(CFG::Materials_Players_LagRecords_Style == 0 ? m_pFlatNoInvis : m_pShadedNoInvis);
+	const auto pMaterial = GetMaterial(CFG::Materials_LagRecords_Material);
+	const auto& color = CFG::Color_LagRecord;
+
+	if (pMaterial)
+	{
+		I::ModelRender->ForcedMaterialOverride(pMaterial);
+		if (pMaterial != m_pGlow)
+			I::RenderView->SetColorModulation(color);
+		else if (m_pGlowEnvmapTint)
+			m_pGlowEnvmapTint->SetVecValue(ColorUtils::ToFloat(color.r), ColorUtils::ToFloat(color.g), ColorUtils::ToFloat(color.b));
+	}
 
 	if (CFG::Materials_Players_No_Depth)
 		pRenderContext->DepthRange(0.0f, 0.2f);
@@ -344,7 +366,7 @@ void CMaterials::RunLagRecords()
 		if (nRecords <= 0)
 			continue;
 
-		if (CFG::Materials_Players_LagRecords_Style == 0)
+		if (CFG::Materials_LagRecords_Style == 0)
 		{
 			for (int n = 1; n < nRecords; n++)
 			{
@@ -353,7 +375,7 @@ void CMaterials::RunLagRecords()
 				if (!pRecord || !F::VisualUtils->IsOnScreenNoEntity(pLocal, pRecord->AbsOrigin) || !F::LagRecords->DiffersFromCurrent(pRecord))
 					continue;
 
-				I::RenderView->SetBlend(Math::RemapValClamped(static_cast<float>(n), 1.0f, static_cast<float>(nRecords), 0.1f, 0.001f));
+				I::RenderView->SetBlend(Math::RemapValClamped(static_cast<float>(n), 1.0f, static_cast<float>(nRecords), CFG::Materials_LagRecords_Alpha, 0.01f));
 
 				F::LagRecordMatrixHelper->Set(pRecord);
 				m_bRendering = true;
@@ -372,7 +394,7 @@ void CMaterials::RunLagRecords()
 			if (!pRecord || !F::VisualUtils->IsOnScreenNoEntity(pLocal, pRecord->AbsOrigin) || !F::LagRecords->DiffersFromCurrent(pRecord))
 				continue;
 
-			I::RenderView->SetBlend(1.0f);
+			I::RenderView->SetBlend(CFG::Materials_LagRecords_Alpha);
 
 			F::LagRecordMatrixHelper->Set(pRecord);
 			m_bRendering = true;
@@ -391,6 +413,7 @@ void CMaterials::RunLagRecords()
 		pRenderContext->DepthRange(0.0f, 1.0f);
 
 	I::RenderView->SetBlend(1.0f);
+	I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
 }
 
 void CMaterials::RunFakeAngle()
@@ -403,36 +426,65 @@ void CMaterials::RunFakeAngle()
 	if (!pLocal || !pLocal->IsAlive())
 		return;
 
-	// Check if we should draw (bones are setup in LocalAnimations now)
-	if (!F::FakeAngle->m_bBonesSetup || !CFG::Exploits_AntiAim_DrawFakeModel)
-		return;
-	
-	// Also check the draw chams flag (set by FakeLag/PacketManip)
-	if (!F::FakeAngle->m_bDrawChams)
+	// Check if bones are setup (SetupFakeModel handles all the logic)
+	if (!F::FakeAngle->m_bBonesSetup)
 		return;
 
-	// Get the cached bone data
+	// Check if fake model materials are enabled
+	if (!CFG::Materials_FakeModel_Active)
+		return;
+
+	// Get cached bone data
 	auto pCachedBoneData = pLocal->GetCachedBoneData();
 	if (!pCachedBoneData || pCachedBoneData->Count() <= 0)
 		return;
 
-	// Save original bones
+	// Save original bones BEFORE any rendering
 	matrix3x4_t originalBones[128];
 	int boneCount = std::min(pCachedBoneData->Count(), 128);
 	memcpy(originalBones, pCachedBoneData->Base(), sizeof(matrix3x4_t) * boneCount);
 
-	// Set fake bones
+	// Set fake bones for rendering
 	memcpy(pCachedBoneData->Base(), F::FakeAngle->m_aBones, sizeof(matrix3x4_t) * boneCount);
 
-	// Draw the fake angle model with a semi-transparent flat material
-	m_bRenderingOriginalMat = false;
-	
-	// Use a distinct color for the fake model (cyan/teal)
-	I::RenderView->SetColorModulation(0.0f, 0.8f, 0.8f);
-	I::ModelRender->ForcedMaterialOverride(m_pFlatNoInvis);
-	I::RenderView->SetBlend(0.4f);
+	// Get material based on fake model material setting
+	auto GetMaterial = [&](int nIndex) -> IMaterial* {
+		switch (nIndex)
+		{
+		case 0: return nullptr;
+		case 1: return m_pFlat;
+		case 2: return m_pShaded;
+		case 3: return m_pGlossy;
+		case 4: return m_pGlow;
+		case 5: return m_pPlastic;
+		default: return m_pFlat;
+		}
+	};
 
-	// Draw the model
+	m_bRenderingOriginalMat = CFG::Materials_FakeModel_Material == 0;
+
+	const auto pMaterial = GetMaterial(CFG::Materials_FakeModel_Material);
+	const auto& color = CFG::Color_FakeModel;
+
+	if (pMaterial)
+	{
+		I::ModelRender->ForcedMaterialOverride(pMaterial);
+		if (pMaterial != m_pGlow)
+			I::RenderView->SetColorModulation(color);
+		else if (m_pGlowEnvmapTint)
+			m_pGlowEnvmapTint->SetVecValue(ColorUtils::ToFloat(color.r), ColorUtils::ToFloat(color.g), ColorUtils::ToFloat(color.b));
+	}
+	else
+	{
+		I::RenderView->SetColorModulation(color);
+	}
+
+	I::RenderView->SetBlend(CFG::Materials_FakeModel_Alpha);
+
+	if (CFG::Materials_Players_No_Depth)
+		pRenderContext->DepthRange(0.0f, 0.2f);
+
+	// Draw the fake model
 	m_bRendering = true;
 	const float flOldInvisibility = pLocal->m_flInvisibility();
 	pLocal->m_flInvisibility() = 0.0f;
@@ -440,12 +492,23 @@ void CMaterials::RunFakeAngle()
 	pLocal->m_flInvisibility() = flOldInvisibility;
 	m_bRendering = false;
 
-	// Restore original bones
-	memcpy(pCachedBoneData->Base(), originalBones, sizeof(matrix3x4_t) * boneCount);
-
+	// Restore rendering state
 	I::ModelRender->ForcedMaterialOverride(nullptr);
 	I::RenderView->SetBlend(1.0f);
 	I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+
+	if (CFG::Materials_Players_No_Depth)
+		pRenderContext->DepthRange(0.0f, 1.0f);
+
+	// Restore original bones AFTER rendering is complete
+	pCachedBoneData = pLocal->GetCachedBoneData();
+	if (pCachedBoneData && pCachedBoneData->Count() > 0)
+	{
+		memcpy(pCachedBoneData->Base(), originalBones, sizeof(matrix3x4_t) * std::min(pCachedBoneData->Count(), 128));
+	}
+	
+	// Invalidate bone cache to force recalculation with real angles next frame
+	pLocal->InvalidateBoneCache();
 }
 
 void CMaterials::Run()

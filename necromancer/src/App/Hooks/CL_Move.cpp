@@ -11,7 +11,11 @@
 MAKE_SIGNATURE(CL_Move, "engine.dll", "40 55 53 48 8D AC 24 ? ? ? ? B8 ? ? ? ? E8 ? ? ? ? 48 2B E0 83 3D", 0x0);
 
 // Max ticks for the shifting system
-constexpr int MAX_SHIFT_TICKS = 22;
+constexpr int MAX_SHIFT_TICKS = 24;
+constexpr int ANTIAIM_TICKS = 2;
+
+// Track if anti-aim was active last frame to detect when it's enabled
+static bool s_bWasAntiAimActive = false;
 
 MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	float accumulated_extra_samples, bool bFinalTick)
@@ -27,15 +31,34 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
 	int nServerMaxTicks = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : MAX_COMMANDS;
 	
+	// Check if anti-aim is active
+	bool bAntiAimActive = F::FakeAngle->AntiAimOn();
+	
+	// If anti-aim was just enabled and we have more ticks than allowed, consume the excess
+	if (bAntiAimActive && !s_bWasAntiAimActive)
+	{
+		int nMaxWithAntiAim = MAX_SHIFT_TICKS - ANTIAIM_TICKS;
+		if (CFG::Misc_AntiCheat_Enabled)
+			nMaxWithAntiAim = std::min(nMaxWithAntiAim, 8 - ANTIAIM_TICKS);
+		
+		// If we have more ticks than allowed with anti-aim, consume the excess
+		if (Shifting::nAvailableTicks > nMaxWithAntiAim)
+		{
+			Shifting::nAvailableTicks = nMaxWithAntiAim;
+		}
+	}
+	s_bWasAntiAimActive = bAntiAimActive;
+	
 	// Calculate effective max ticks
+	// When anti-aim is OFF: can store up to 24 ticks
+	// When anti-aim is ON: can store up to 22 ticks (24 - 2 for anti-aim)
 	int nMaxTicks = std::min(nServerMaxTicks, MAX_SHIFT_TICKS);
 	if (CFG::Misc_AntiCheat_Enabled)
 		nMaxTicks = std::min(nMaxTicks, 8);
 	
-	// AMALGAM STYLE: m_iMaxShift is the max ticks we can store
-	// Anti-aim ticks are NOT subtracted here - they're handled by choking in CreateMove
-	// The tick reservation happens naturally because anti-aim chokes packets
-	int nMaxRechargeTicks = nMaxTicks;
+	// Reserve ticks for anti-aim when it's enabled
+	int nMaxRechargeTicks = bAntiAimActive ? (nMaxTicks - ANTIAIM_TICKS) : nMaxTicks;
+	nMaxRechargeTicks = std::max(nMaxRechargeTicks, 0); // Safety clamp
 	
 	auto callOriginal = [&](bool bFinal)
 	{
@@ -94,7 +117,7 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 		Shifting::bShifting = true;
 		Shifting::bShiftingRapidFire = true;
 
-		int nTicks = std::min(CFG::Exploits_RapidFire_Ticks, nMaxTicks);
+		int nTicks = std::min(CFG::Exploits_RapidFire_Ticks, nMaxRechargeTicks);
 		nTicks = std::min(nTicks, Shifting::nAvailableTicks);
 		
 		for (int n = 0; n < nTicks; n++)
@@ -120,7 +143,7 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 				Shifting::bShifting = true;
 				Shifting::bShiftingWarp = true;
 
-				int nTicks = std::min(Shifting::nAvailableTicks, nMaxTicks);
+				int nTicks = std::min(Shifting::nAvailableTicks, nMaxRechargeTicks);
 
 				for (int n = 0; n < nTicks; n++)
 				{
@@ -150,7 +173,7 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 
 					if (CFG::Exploits_Warp_Mode == 1)
 					{
-						int nTicks = std::min(Shifting::nAvailableTicks, nMaxTicks);
+						int nTicks = std::min(Shifting::nAvailableTicks, nMaxRechargeTicks);
 
 						for (int n = 0; n < nTicks; n++)
 						{

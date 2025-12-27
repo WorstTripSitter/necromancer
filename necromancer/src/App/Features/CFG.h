@@ -326,6 +326,17 @@ namespace CFG
 	CFGVAR(Materials_Players_Show_Teammate_Medics, false);
 	CFGVAR(Materials_Players_LagRecords_Style, 1); //0 All 1 Last Only
 
+	// Fake Model
+	CFGVAR(Materials_FakeModel_Active, true);
+	CFGVAR(Materials_FakeModel_Alpha, 0.5f);
+	CFGVAR(Materials_FakeModel_Material, 1); //0 Original 1 Flat 2 Shaded 3 Glossy 4 Glow 5 Plastic
+
+	// Lag Records Material
+	CFGVAR(Materials_LagRecords_Active, false);
+	CFGVAR(Materials_LagRecords_Alpha, 0.3f);
+	CFGVAR(Materials_LagRecords_Material, 1); //0 Original 1 Flat 2 Shaded 3 Glossy 4 Glow 5 Plastic
+	CFGVAR(Materials_LagRecords_Style, 1); //0 All 1 Last Only
+
 	CFGVAR(Materials_Buildings_Active, false);
 	CFGVAR(Materials_Buildings_No_Depth, false);
 	CFGVAR(Materials_Buildings_Alpha, 0.30f);
@@ -629,8 +640,6 @@ namespace CFG
 	CFGVAR(Exploits_AntiAim_MinWalk, true); // Prevent standing still detection
 	CFGVAR(Exploits_AntiAim_AntiOverlap, false); // Prevent real/fake overlap
 	CFGVAR(Exploits_AntiAim_InvalidShootPitch, false); // Hide pitch on shot
-	// Visuals
-	CFGVAR(Exploits_AntiAim_DrawFakeModel, true); // Draw fake angle chams
 
 	CFGVAR(Exploits_Crits_Force_Crit_Key, 0);
 	CFGVAR(Exploits_Crits_Force_Crit_Key_Melee, 0);
@@ -709,6 +718,8 @@ namespace CFG
 	CFGVAR(Color_Cheater, Color_t({ 248, 253, 8, 255 }));
 	CFGVAR(Color_RetardLegit, Color_t({ 253, 3, 11, 255 }));
 	CFGVAR(Color_F2P, Color_t({ 200, 200, 200, 255 })); // F2P player tag color
+	CFGVAR(Color_FakeModel, Color_t({ 0, 204, 204, 255 })); // Cyan for fake model
+	CFGVAR(Color_LagRecord, Color_t({ 255, 255, 255, 255 })); // White for lag records
 	// Party colors (12 unique colors for different parties)
 	CFGVAR(Color_Party_1, Color_t({ 100, 50, 255, 255 }));   // Purple (local party)
 	CFGVAR(Color_Party_2, Color_t({ 255, 100, 100, 255 }));  // Red

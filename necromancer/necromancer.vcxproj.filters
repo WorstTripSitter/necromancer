@@ -156,6 +156,7 @@
     <ClCompile Include="src\Utils\CrashHandler\CrashHandler.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPartyClient_RequestQueueForMatch.cpp" />
     <ClCompile Include="src\App\Hooks\ISteamNetworkingUtils_GetPingToDataCenter.cpp" />
+    <ClCompile Include="src\App\Hooks\DataTable_Warning.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\App\Features\Aimbot\AimbotHitscan\AimbotHitscan.h" />

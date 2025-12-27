@@ -21,6 +21,7 @@ public:
 	void Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, bool bSendPacket);
 	void MinWalk(CUserCmd* pCmd, C_TFPlayer* pLocal);
 	void SetupFakeModel(C_TFPlayer* pLocal);
+	void StoreSentBones(C_TFPlayer* pLocal); // Store bones when packet is sent
 	
 	Vec2 GetRealAngles() const { return m_vRealAngles; }
 	Vec2 GetFakeAngles() const { return m_vFakeAngles; }
@@ -31,6 +32,10 @@ public:
 	// Fake model bones for chams
 	matrix3x4_t m_aBones[128];
 	bool m_bBonesSetup = false;
+	
+	// Last sent bones (for fakelag-only mode)
+	matrix3x4_t m_aLastSentBones[128];
+	bool m_bLastSentBonesValid = false;
 	
 	// Whether to draw fake angle chams (set by PacketManip)
 	bool m_bDrawChams = false;

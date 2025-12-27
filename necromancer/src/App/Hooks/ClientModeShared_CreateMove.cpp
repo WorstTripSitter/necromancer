@@ -18,12 +18,27 @@
 #include "../Features/amalgam_port/AmalgamCompat.h"
 
 // Local animations - Amalgam style
-// This updates the local player's animation state based on the angles we're sending
-// Only needed when choking packets to sync animations with the angles being sent
+// This updates the local player's animation state based on the REAL angles (not fake)
+// The fake model uses separate bones set up in SetupFakeModel
 static inline void LocalAnimations(C_TFPlayer* pLocal, CUserCmd* pCmd, bool bSendPacket)
 {
 	static std::vector<Vec3> vAngles = {};
-	vAngles.push_back(pCmd->viewangles);
+	
+	// Use the REAL angles from FakeAngle, not the cmd angles (which may be fake on send tick)
+	// This ensures your actual model shows the real pitch, not the fake pitch
+	Vec3 vRealAngles;
+	if (F::FakeAngle->AntiAimOn())
+	{
+		Vec2 vReal = F::FakeAngle->GetRealAngles();
+		vRealAngles = { vReal.x, vReal.y, 0.0f };
+	}
+	else
+	{
+		vRealAngles = pCmd->viewangles;
+		vRealAngles.x = std::clamp(vRealAngles.x, -89.0f, 89.0f);
+	}
+	
+	vAngles.push_back(vRealAngles);
 	
 	auto pAnimState = pLocal->GetAnimState();
 	if (bSendPacket && pAnimState)
@@ -35,12 +50,10 @@ static inline void LocalAnimations(C_TFPlayer* pLocal, CUserCmd* pCmd, bool bSen
 		
 		for (auto& vAngle : vAngles)
 		{
-			float flPitch = std::clamp(vAngle.x, -89.0f, 89.0f);
-			
 			if (pLocal->InCond(TF_COND_TAUNTING) && pLocal->m_bAllowMoveDuringTaunt())
 				pLocal->m_flTauntYaw() = vAngle.y;
 			pAnimState->m_flEyeYaw = vAngle.y;
-			pAnimState->Update(vAngle.y, flPitch);
+			pAnimState->Update(vAngle.y, vAngle.x);
 			pLocal->FrameAdvance(TICK_INTERVAL);
 		}
 		
@@ -352,6 +365,7 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	// ============================================
 	*pSendPacket = true;
 	F::FakeLag->Run(pLocal, pWeapon, pCmd, pSendPacket);
+	F::FakeLag->UpdateDrawChams(); // Update fake model visibility based on actual fakelag state
 	
 	// Anti-aim choking - ShouldRun already checks G::Attacking == 1
 	if (AntiAimCheck(pLocal, pWeapon, pCmd))
@@ -405,6 +419,10 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	// AMALGAM ORDER: AntiCheatCompatibility
 	// ============================================
 	F::AntiCheatCompat->ProcessCommand(pCmd, pSendPacket);
+
+	// Store bones when packet is sent (for fakelag visualization)
+	if (*pSendPacket)
+		F::FakeAngle->StoreSentBones(pLocal);
 
 	// ============================================
 	// AMALGAM ORDER: LocalAnimations (at the very end)

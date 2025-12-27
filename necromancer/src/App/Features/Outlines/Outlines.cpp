@@ -147,7 +147,7 @@ void COutlines::RunModels()
 
 	if (!CFG::Outlines_Active || I::EngineVGui->IsGameUIVisible() || F::SpyCamera->IsRendering())
 		return;
-	
+
 	// Early exit if nothing is enabled - massive performance gain
 	if (!CFG::Outlines_Players_Active && !CFG::Outlines_Buildings_Active && !CFG::Outlines_World_Active)
 		return;

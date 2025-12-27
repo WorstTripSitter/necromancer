@@ -68,9 +68,8 @@ bool CFakeAngle::ShouldRun(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd
 	if (pLocal->InCond(TF_COND_SHIELD_CHARGE))
 		return false;
 	
-	// Don't anti-aim when attacking (check both G::Attacking and current cmd buttons)
-	// G::Attacking is set early, but aimbot might add IN_ATTACK later
-	if (G::Attacking == 1)
+	// Don't anti-aim when attacking
+	if (G::Attacking == 1 || G::bFiring || G::bSilentAngles || G::bPSilentAngles)
 		return false;
 	
 	// Don't anti-aim during rapid fire shifting
@@ -179,8 +178,9 @@ float CFakeAngle::GetYaw(C_TFPlayer* pLocal, CUserCmd* pCmd, bool bFake)
 
 float CFakeAngle::GetPitch(float flCurPitch)
 {
-	float flRealPitch = 0.0f, flFakePitch = 0.0f;
 	int iJitter = GetJitter(HashJitter("Pitch"));
+	
+	float flRealPitch = 0.0f, flFakePitch = 0.0f;
 	
 	// PitchReal: 0=None, 1=Up, 2=Down, 3=Zero, 4=Jitter, 5=ReverseJitter
 	switch (CFG::Exploits_AntiAim_PitchReal)
@@ -201,7 +201,10 @@ float CFakeAngle::GetPitch(float flCurPitch)
 		case 4: flFakePitch = 89.0f * iJitter; break; // ReverseJitter
 	}
 	
-	// Amalgam's pitch trick - adds 360 to create invalid pitch that looks different to enemies
+	// Amalgam logic: if both are set, create exploit pitch
+	// The +/-360 creates an "invalid" angle that the server clamps differently
+	// This makes your visual model show fake pitch while real hitbox uses real pitch
+	// NOTE: This only works for extreme pitches (up/down), not arbitrary values
 	if (CFG::Exploits_AntiAim_PitchReal && CFG::Exploits_AntiAim_PitchFake)
 		return flRealPitch + (flFakePitch > 0.0f ? 360.0f : -360.0f);
 	else if (CFG::Exploits_AntiAim_PitchReal)
@@ -272,34 +275,47 @@ void CFakeAngle::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon
 		return;
 	}
 	
-	// bSendPacket = true means this is the "fake" tick that gets sent (shown to enemies)
-	// bSendPacket = false means this is the "real" tick that gets choked
+	// Amalgam approach:
+	// bSendPacket = true  -> This is the FAKE tick (sent to server, what enemies see)
+	// bSendPacket = false -> This is the REAL tick (choked, your actual hitbox)
 	
-	// Get the pitch - this may return unclamped values like -449 for the fake pitch trick
-	float flPitch = GetPitch(pCmd->viewangles.x);
-	float flYaw = GetYaw(pLocal, pCmd, bSendPacket);
+	// Get the appropriate angles for this tick
+	Vec2& vAngles = bSendPacket ? m_vFakeAngles : m_vRealAngles;
 	
-	// Store angles - always clamp for visual purposes
+	// Pitch: Amalgam uses a single GetPitch that combines real+fake into exploit pitch
+	// The pitch is the SAME for both ticks - the exploit is in the value itself
+	vAngles.x = GetPitch(pCmd->viewangles.x);
+	
+	// Yaw: Different for real vs fake
+	// bSendPacket = true means fake yaw (what enemies see)
+	// bSendPacket = false means real yaw (your actual hitbox direction)
+	vAngles.y = GetYaw(pLocal, pCmd, bSendPacket);
+	
+	// Store both angles for visualization (fake model needs fake angles)
+	// We need to calculate the OTHER set of angles too for the fake model
 	if (bSendPacket)
 	{
-		m_vFakeAngles.x = std::clamp(flPitch, -89.0f, 89.0f);
-		m_vFakeAngles.y = flYaw;
+		// This is the fake tick, also calculate real angles for storage
+		m_vRealAngles.x = GetPitch(pCmd->viewangles.x);
+		m_vRealAngles.y = GetYaw(pLocal, pCmd, false); // false = real yaw
 	}
 	else
 	{
-		m_vRealAngles.x = std::clamp(flPitch, -89.0f, 89.0f);
-		m_vRealAngles.y = flYaw;
+		// This is the real tick, also calculate fake angles for storage
+		m_vFakeAngles.x = GetPitch(pCmd->viewangles.x);
+		m_vFakeAngles.y = GetYaw(pLocal, pCmd, true); // true = fake yaw
 	}
 	
-	// Apply angles to cmd - use unclamped pitch for server
-	Vec3 vCmdAngles = { flPitch, flYaw, 0.0f };
+	// Apply angles to cmd
+	Vec3 vCmdAngles = { vAngles.x, vAngles.y, 0.0f };
 	
 	// Only clamp cmd angles when anti-cheat compatibility is enabled (like Amalgam)
 	if (CFG::Misc_AntiCheat_Enabled)
 		Math::ClampAngles(vCmdAngles);
 	
-	// Fix movement using clamped angles to avoid issues
-	Vec3 vClampedForMovement = { std::clamp(flPitch, -89.0f, 89.0f), flYaw, 0.0f };
+	// Fix movement using the angles we're applying
+	// Use clamped pitch for movement fix to avoid issues
+	Vec3 vClampedForMovement = { std::clamp(vAngles.x, -89.0f, 89.0f), vAngles.y, 0.0f };
 	H::AimUtils->FixMovement(pCmd, vClampedForMovement);
 	
 	// Apply angles
@@ -311,6 +327,26 @@ void CFakeAngle::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon
 	MinWalk(pCmd, pLocal);
 }
 
+void CFakeAngle::StoreSentBones(C_TFPlayer* pLocal)
+{
+	if (!pLocal || !pLocal->IsAlive())
+	{
+		m_bLastSentBonesValid = false;
+		return;
+	}
+	
+	auto pCachedBoneData = pLocal->GetCachedBoneData();
+	if (!pCachedBoneData || pCachedBoneData->Count() <= 0)
+	{
+		m_bLastSentBonesValid = false;
+		return;
+	}
+	
+	// Store current bones as "last sent" bones
+	memcpy(m_aLastSentBones, pCachedBoneData->Base(), sizeof(matrix3x4_t) * std::min(pCachedBoneData->Count(), 128));
+	m_bLastSentBonesValid = true;
+}
+
 void CFakeAngle::SetupFakeModel(C_TFPlayer* pLocal)
 {
 	if (!pLocal || !pLocal->IsAlive())
@@ -319,21 +355,48 @@ void CFakeAngle::SetupFakeModel(C_TFPlayer* pLocal)
 		return;
 	}
 	
-	// Check if we should draw (like Amalgam's group check)
-	if (!AntiAimOn() && !CFG::Exploits_FakeLag_Enabled)
+	// Check if we should draw fake model:
+	// 1. Anti-aim is on, OR
+	// 2. Fakelag is enabled AND we're actually choking (chokedcommands > 0)
+	bool bShouldDraw = AntiAimOn() || (CFG::Exploits_FakeLag_Enabled && I::ClientState->chokedcommands > 0);
+	
+	if (!bShouldDraw)
 	{
 		m_bBonesSetup = false;
 		return;
 	}
 	
-	if (!CFG::Exploits_AntiAim_DrawFakeModel)
+	// For fakelag-only mode (no anti-aim), use the last sent bones
+	if (!AntiAimOn())
 	{
-		m_bBonesSetup = false;
+		// Use last sent bones for fakelag visualization
+		if (m_bLastSentBonesValid)
+		{
+			memcpy(m_aBones, m_aLastSentBones, sizeof(matrix3x4_t) * 128);
+			m_bBonesSetup = true;
+		}
+		else
+		{
+			m_bBonesSetup = false;
+		}
 		return;
 	}
 	
+	// Anti-aim mode: setup bones based on fake angles
 	auto pAnimState = pLocal->GetAnimState();
 	if (!pAnimState)
+	{
+		m_bBonesSetup = false;
+		return;
+	}
+	
+	// Skip if angles are too similar (no point showing fake model)
+	// Compare the VISUAL angles (clamped pitch) since that's what the model shows
+	float flVisualRealPitch = std::clamp(m_vRealAngles.x, -89.0f, 89.0f);
+	float flVisualFakePitch = std::clamp(m_vFakeAngles.x, -89.0f, 89.0f);
+	float flPitchDiff = fabsf(flVisualRealPitch - flVisualFakePitch);
+	float flYawDiff = fabsf(Math::NormalizeAngle(m_vRealAngles.y - m_vFakeAngles.y));
+	if (flPitchDiff < 5.0f && flYawDiff < 5.0f)
 	{
 		m_bBonesSetup = false;
 		return;
@@ -349,16 +412,19 @@ void CFakeAngle::SetupFakeModel(C_TFPlayer* pLocal)
 	char pOldAnimState[sizeof(CMultiPlayerAnimState)];
 	memcpy(pOldAnimState, pAnimState, sizeof(CMultiPlayerAnimState));
 	
-	// Setup fake angles - clamp pitch for visual (the 271 trick is for server, not visual)
+	// Setup fake angles - clamp pitch for visual (like Amalgam)
 	I::GlobalVars->frametime = 0.0f;
 	Vec2 vAngle = { std::clamp(m_vFakeAngles.x, -89.0f, 89.0f), m_vFakeAngles.y };
 	
 	if (pLocal->InCond(TF_COND_TAUNTING) && pLocal->m_bAllowMoveDuringTaunt())
 		pLocal->m_flTauntYaw() = vAngle.y;
 	
-	// Use m_flCurrentFeetYaw like Amalgam does
+	// Amalgam style: Update with feet yaw set to the fake yaw
+	// This is what makes the fake model face the fake direction
 	pAnimState->m_flCurrentFeetYaw = vAngle.y;
 	pAnimState->Update(vAngle.y, vAngle.x);
+	
+	// Invalidate and setup bones with the new pose parameters
 	pLocal->InvalidateBoneCache();
 	m_bBonesSetup = pLocal->SetupBones(m_aBones, 128, BONE_USED_BY_ANYTHING, I::GlobalVars->curtime);
 	

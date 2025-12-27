@@ -53,9 +53,12 @@ bool CFakeLag::IsAllowed(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* 
 	if (CFG::Misc_AntiCheat_Enabled)
 		nMaxTicks = std::min(nMaxTicks, 8);
 	
-	// Calculate max choke based on shifted ticks
-	// NOTE: Don't subtract anti-aim ticks here - anti-aim choking is handled separately in CreateMove
-	int nMaxChoke = std::min(24 - Shifting::nAvailableTicks, std::min(21, nMaxTicks));
+	// Reserve ticks for anti-aim if it's active
+	int nAntiAimTicks = (F::FakeAngle->YawOn() && F::FakeAngle->ShouldRun(pLocal, pWeapon, pCmd)) ? F::FakeAngle->AntiAimTicks() : 0;
+	
+	// Calculate max choke based on shifted ticks and anti-aim reservation
+	int nMaxChoke = std::min(24 - Shifting::nAvailableTicks - nAntiAimTicks, std::min(21 - nAntiAimTicks, nMaxTicks - nAntiAimTicks));
+	nMaxChoke = std::min(nMaxChoke, CFG::Exploits_FakeLag_Max_Ticks);
 	
 	// Check basic conditions
 	if (!(CFG::Exploits_FakeLag_Enabled || m_bPreservingBlast || m_bUnducking)
@@ -203,19 +206,8 @@ bool CFakeLag::IsSniperThreat(C_TFPlayer* pLocal, int& outMinTicks, int& outMaxT
 
 void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, bool* pSendPacket)
 {
-	// Set draw chams flag (like Amalgam's PacketManip)
-	F::FakeAngle->m_bDrawChams = CFG::Exploits_FakeLag_Enabled || F::FakeAngle->AntiAimOn();
-	
 	// Default to sending packet
 	*pSendPacket = true;
-	
-	// Don't run fakelag if anti-aim yaw is on - anti-aim handles its own choking
-	// This is how Amalgam does it - FakeLag and AntiAim choking are separate
-	if (F::FakeAngle->YawOn() && F::FakeAngle->ShouldRun(pLocal, pWeapon, pCmd))
-	{
-		m_bEnabled = false;
-		return;
-	}
 	
 	// Set goal to 22 for adaptive mode
 	if (!m_iGoal)
@@ -266,9 +258,10 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 		if (CFG::Misc_AntiCheat_Enabled)
 			nMaxTicks = std::min(nMaxTicks, 8);
 		
-		// NOTE: Don't subtract anti-aim ticks here - anti-aim choking is handled separately in CreateMove
-		int nAvailableForFakelag = nMaxTicks - Shifting::nAvailableTicks;
-		nAvailableForFakelag = std::min(nAvailableForFakelag, 21);
+		// Reserve ticks for anti-aim if it's active
+		int nAntiAimTicks = (F::FakeAngle->YawOn() && F::FakeAngle->ShouldRun(pLocal, pWeapon, pCmd)) ? F::FakeAngle->AntiAimTicks() : 0;
+		int nAvailableForFakelag = nMaxTicks - Shifting::nAvailableTicks - nAntiAimTicks;
+		nAvailableForFakelag = std::min(nAvailableForFakelag, 21 - nAntiAimTicks);
 		nAvailableForFakelag = std::min(nAvailableForFakelag, CFG::Exploits_FakeLag_Max_Ticks);
 		
 		if (I::ClientState->chokedcommands >= nAvailableForFakelag)
@@ -337,4 +330,11 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 
 	*pSendPacket = false;
 	m_bEnabled = true;
+}
+
+// Called after Run() to set the draw chams flag based on actual fakelag state
+void CFakeLag::UpdateDrawChams()
+{
+	// Show fake model when fakelagging or anti-aim is active
+	F::FakeAngle->m_bDrawChams = m_bEnabled || F::FakeAngle->AntiAimOn();
 }
