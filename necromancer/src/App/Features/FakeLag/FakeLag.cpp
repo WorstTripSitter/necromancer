@@ -116,11 +116,63 @@ bool CFakeLag::IsAllowed(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* 
 
 bool CFakeLag::IsSniperThreat(C_TFPlayer* pLocal, int& outMinTicks, int& outMaxTicks)
 {
-	if (!CFG::Exploits_FakeLag_Activate_On_Sightline)
-		return false;
+	// Legacy wrapper - returns true if any threat type is detected
+	return CheckSniperThreat(pLocal, outMinTicks, outMaxTicks) != EFakeLagThreatType::None;
+}
 
-	outMinTicks = 3;
-	outMaxTicks = 8;
+int CFakeLag::CalculateMaxAllowedTicks(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
+{
+	// Get server max ticks
+	static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
+	int nMaxTicks = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
+	
+	// Anti-cheat compatibility limits to 8 ticks
+	if (CFG::Misc_AntiCheat_Enabled)
+		nMaxTicks = std::min(nMaxTicks, 8);
+	
+	// Reserve ticks for anti-aim if active (max 22 ticks when anti-aiming)
+	int nAntiAimTicks = 0;
+	bool bAntiAiming = F::FakeAngle->YawOn() && F::FakeAngle->ShouldRun(pLocal, pWeapon, pCmd);
+	if (bAntiAiming)
+	{
+		nAntiAimTicks = F::FakeAngle->AntiAimTicks();
+		// When anti-aiming, absolute max is 22 ticks for fakelag
+		nMaxTicks = std::min(nMaxTicks, 22);
+	}
+	
+	// Account for stored ticks (rapid fire/doubletap)
+	int nStoredTicks = Shifting::nAvailableTicks;
+	
+	// Calculate available ticks: max - stored - anti-aim reservation
+	int nAvailable = nMaxTicks - nStoredTicks - nAntiAimTicks;
+	
+	// Also respect the 21 tick limit minus anti-aim
+	nAvailable = std::min(nAvailable, 21 - nAntiAimTicks);
+	
+	// Respect user's max ticks slider
+	nAvailable = std::min(nAvailable, CFG::Exploits_FakeLag_Max_Ticks);
+	
+	// Ensure at least 1 tick available
+	return std::max(nAvailable, 1);
+}
+
+EFakeLagThreatType CFakeLag::CheckSniperThreat(C_TFPlayer* pLocal, int& outMinTicks, int& outMaxTicks)
+{
+	if (!CFG::Exploits_FakeLag_Activate_On_Sightline)
+		return EFakeLagThreatType::None;
+
+	// Default values for no tag (will be overridden based on threat type)
+	outMinTicks = 4;
+	outMaxTicks = 7;
+	
+	// Base sightline distance multiplier for OBB check (no tag baseline)
+	constexpr float flBaseDistMultX = 6.0f;
+	constexpr float flBaseDistMultY = 6.0f;
+	constexpr float flBaseDistMultZ = 3.0f;
+	
+	EFakeLagThreatType eHighestThreat = EFakeLagThreatType::None;
+	int nHighestMinTicks = 0;
+	int nHighestMaxTicks = 0;
 
 	for (const auto pEntity : H::Entities->GetGroup(EEntGroup::PLAYERS_ENEMIES))
 	{
@@ -131,6 +183,7 @@ bool CFakeLag::IsSniperThreat(C_TFPlayer* pLocal, int& outMinTicks, int& outMaxT
 		if (!pEnemy || pEnemy->deadflag())
 			continue;
 
+		// Only check snipers
 		if (pEnemy->m_iClass() != TF_CLASS_SNIPER)
 			continue;
 
@@ -138,59 +191,83 @@ bool CFakeLag::IsSniperThreat(C_TFPlayer* pLocal, int& outMinTicks, int& outMaxT
 		if (!pWeapon || pWeapon->GetSlot() != WEAPON_SLOT_PRIMARY || pWeapon->GetWeaponID() == TF_WEAPON_COMPOUND_BOW)
 			continue;
 
+		// Get player tag info
 		PlayerPriority pInfo{};
 		const bool bHasTag = F::Players->GetInfo(pEnemy->entindex(), pInfo);
 
-		if (bHasTag && pInfo.Cheater)
-		{
-			outMinTicks = 10;
-			outMaxTicks = 18;
-			return true;
-		}
-
-		if (bHasTag && pInfo.RetardLegit)
-		{
-			const bool bVisibleFromCenter = H::AimUtils->TraceEntityAutoDet(
-				pEntity,
-				pLocal->GetCenter(),
-				pEnemy->m_vecOrigin() + Vec3{ 0.0f, 0.0f, pEnemy->m_vecMaxs().z }
-			);
-
-			const bool bVisibleFromHead = H::AimUtils->TraceEntityAutoDet(
-				pEntity,
-				pLocal->m_vecOrigin() + Vec3{ 0.0f, 0.0f, pLocal->m_vecMaxs().z },
-				pEnemy->m_vecOrigin() + Vec3{ 0.0f, 0.0f, pEnemy->m_vecMaxs().z }
-			);
-
-			if (bVisibleFromCenter || bVisibleFromHead)
-			{
-				outMinTicks = 2;
-				outMaxTicks = 20;
-				return true;
-			}
-			
-			continue;
-		}
-
+		// Check if enemy is scoped (required for all threat types)
 		bool bZoomed = pEnemy->InCond(TF_COND_ZOOMED);
 		if (pWeapon->GetWeaponID() == TF_WEAPON_SNIPERRIFLE_CLASSIC)
 		{
 			bZoomed = pWeapon->As<C_TFSniperRifleClassic>()->m_bCharging();
 		}
 
+		// Determine threat type based on tag
+		if (bHasTag && pInfo.Cheater)
+		{
+			// CHEATER TAG: 19-24 ticks, no sightline distance check needed, just needs to be scoped
+			if (!bZoomed)
+				continue;
+			
+			// Cheater is highest priority threat
+			if (eHighestThreat != EFakeLagThreatType::Cheater)
+			{
+				eHighestThreat = EFakeLagThreatType::Cheater;
+				nHighestMinTicks = 19;
+				nHighestMaxTicks = 24;
+			}
+			continue;
+		}
+
+		if (bHasTag && pInfo.RetardLegit)
+		{
+			// RETARD LEGIT TAG: 6-12 ticks, 2x sightline distance
+			if (!bZoomed)
+				continue;
+			
+			// Use 2x the base sightline distance for retard legit
+			auto vMins = pLocal->m_vecMins();
+			auto vMaxs = pLocal->m_vecMaxs();
+
+			vMins.x *= flBaseDistMultX * 2.0f;
+			vMins.y *= flBaseDistMultY * 2.0f;
+			vMins.z *= flBaseDistMultZ * 2.0f;
+
+			vMaxs.x *= flBaseDistMultX * 2.0f;
+			vMaxs.y *= flBaseDistMultY * 2.0f;
+			vMaxs.z *= flBaseDistMultZ * 2.0f;
+
+			Vec3 vForward{};
+			Math::AngleVectors(pEnemy->GetEyeAngles(), &vForward);
+
+			if (!Math::RayToOBB(pEnemy->GetShootPos(), vForward, pLocal->m_vecOrigin(), vMins, vMaxs, pLocal->RenderableToWorldTransform()))
+				continue;
+			
+			// Retard legit is second priority (only upgrade if not already cheater)
+			if (eHighestThreat != EFakeLagThreatType::Cheater)
+			{
+				eHighestThreat = EFakeLagThreatType::RetardLegit;
+				nHighestMinTicks = 6;
+				nHighestMaxTicks = 12;
+			}
+			continue;
+		}
+
+		// NO TAG: 4-7 ticks, base sightline distance, must be scoped
 		if (!bZoomed)
 			continue;
 
+		// Use base sightline distance for no tag
 		auto vMins = pLocal->m_vecMins();
 		auto vMaxs = pLocal->m_vecMaxs();
 
-		vMins.x *= 6.0f;
-		vMins.y *= 6.0f;
-		vMins.z *= 3.0f;
+		vMins.x *= flBaseDistMultX;
+		vMins.y *= flBaseDistMultY;
+		vMins.z *= flBaseDistMultZ;
 
-		vMaxs.x *= 6.0f;
-		vMaxs.y *= 6.0f;
-		vMaxs.z *= 3.0f;
+		vMaxs.x *= flBaseDistMultX;
+		vMaxs.y *= flBaseDistMultY;
+		vMaxs.z *= flBaseDistMultZ;
 
 		Vec3 vForward{};
 		Math::AngleVectors(pEnemy->GetEyeAngles(), &vForward);
@@ -198,16 +275,30 @@ bool CFakeLag::IsSniperThreat(C_TFPlayer* pLocal, int& outMinTicks, int& outMaxT
 		if (!Math::RayToOBB(pEnemy->GetShootPos(), vForward, pLocal->m_vecOrigin(), vMins, vMaxs, pLocal->RenderableToWorldTransform()))
 			continue;
 
-		return true;
+		// No tag is lowest priority (only set if no higher threat)
+		if (eHighestThreat == EFakeLagThreatType::None)
+		{
+			eHighestThreat = EFakeLagThreatType::NoTag;
+			nHighestMinTicks = 4;
+			nHighestMaxTicks = 7;
+		}
 	}
 
-	return false;
+	// Set output values based on highest threat found
+	if (eHighestThreat != EFakeLagThreatType::None)
+	{
+		outMinTicks = nHighestMinTicks;
+		outMaxTicks = nHighestMaxTicks;
+	}
+
+	return eHighestThreat;
 }
 
 void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, bool* pSendPacket)
 {
 	// Default to sending packet
 	*pSendPacket = true;
+	m_eCurrentThreat = EFakeLagThreatType::None;
 	
 	// Set goal to 22 for adaptive mode
 	if (!m_iGoal)
@@ -252,19 +343,10 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 			return;
 		}
 		
-		// Calculate max allowed fakelag ticks
-		static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
-		int nMaxTicks = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
-		if (CFG::Misc_AntiCheat_Enabled)
-			nMaxTicks = std::min(nMaxTicks, 8);
+		// Calculate max allowed ticks considering stored ticks, anti-aim, and menu settings
+		int nMaxAllowedTicks = CalculateMaxAllowedTicks(pLocal, pWeapon, pCmd);
 		
-		// Reserve ticks for anti-aim if it's active
-		int nAntiAimTicks = (F::FakeAngle->YawOn() && F::FakeAngle->ShouldRun(pLocal, pWeapon, pCmd)) ? F::FakeAngle->AntiAimTicks() : 0;
-		int nAvailableForFakelag = nMaxTicks - Shifting::nAvailableTicks - nAntiAimTicks;
-		nAvailableForFakelag = std::min(nAvailableForFakelag, 21 - nAntiAimTicks);
-		nAvailableForFakelag = std::min(nAvailableForFakelag, CFG::Exploits_FakeLag_Max_Ticks);
-		
-		if (I::ClientState->chokedcommands >= nAvailableForFakelag)
+		if (I::ClientState->chokedcommands >= nMaxAllowedTicks)
 		{
 			m_iGoal = 0;
 			m_vLastPosition = pLocal->m_vecOrigin();
@@ -288,9 +370,12 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 			return;
 		}
 		
-		int nMinTicks = 3;
-		int nMaxTicksSightline = 8;
-		if (!IsSniperThreat(pLocal, nMinTicks, nMaxTicksSightline))
+		int nMinTicks = 4;
+		int nMaxTicks = 7;
+		EFakeLagThreatType eThreat = CheckSniperThreat(pLocal, nMinTicks, nMaxTicks);
+		m_eCurrentThreat = eThreat;
+		
+		if (eThreat == EFakeLagThreatType::None)
 		{
 			m_iGoal = 0;
 			m_iCurrentChokeTicks = 0;
@@ -300,9 +385,18 @@ void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, 
 			return;
 		}
 		
+		// Clamp max ticks to what's actually allowed
+		nMaxTicks = std::min(nMaxTicks, nMaxAllowedTicks);
+		
+		// Ensure min doesn't exceed max
+		nMinTicks = std::min(nMinTicks, nMaxTicks);
+		
+		// Generate new target if needed
 		if (m_iCurrentChokeTicks >= m_iTargetChokeTicks || m_iTargetChokeTicks == 0)
 		{
-			m_iTargetChokeTicks = nMinTicks + (rand() % (nMaxTicksSightline - nMinTicks + 1));
+			// Random ticks between min and max
+			int nRange = nMaxTicks - nMinTicks;
+			m_iTargetChokeTicks = nMinTicks + (nRange > 0 ? (rand() % (nRange + 1)) : 0);
 			m_iCurrentChokeTicks = 0;
 		}
 		
