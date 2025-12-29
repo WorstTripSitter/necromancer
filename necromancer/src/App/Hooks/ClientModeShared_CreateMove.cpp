@@ -154,6 +154,63 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	auto pLocal = H::Entities->GetLocal();
 	auto pWeapon = H::Entities->GetWeapon();
 
+	// Early check: Temporarily disable Legit AA when engineer tries to pick up a building
+	// This must run BEFORE anti-aim so the pickup works on the first try
+	{
+		static bool bDisabledForBuildingPickup = false;
+		
+		if (pLocal && pLocal->m_iClass() == TF_CLASS_ENGINEER)
+		{
+			// Check if we're currently carrying a building
+			const bool bCarryingBuilding = pLocal->m_bCarryingObject();
+			
+			// Re-enable Legit AA once we've picked up the building
+			if (bDisabledForBuildingPickup && bCarryingBuilding)
+			{
+				CFG::Exploits_LegitAA_Enabled = true;
+				bDisabledForBuildingPickup = false;
+			}
+			
+			// Disable Legit AA when trying to pick up a building (attack2 while looking at own building)
+			if (CFG::Exploits_LegitAA_Enabled && !bCarryingBuilding && (pCmd->buttons & IN_ATTACK2))
+			{
+				// Trace to see if we're looking at our own building
+				Vec3 vStart = pLocal->GetShootPos();
+				Vec3 vForward;
+				Math::AngleVectors(pCmd->viewangles, &vForward);
+				Vec3 vEnd = vStart + vForward * 150.0f; // Building pickup range is ~150 units
+
+				CGameTrace trace;
+				CTraceFilterHitscan filter;
+				filter.m_pIgnore = pLocal;
+				SDK::Trace(vStart, vEnd, MASK_SOLID, &filter, &trace);
+
+				if (trace.m_pEnt)
+				{
+					const auto nClassId = trace.m_pEnt->GetClassId();
+					// Check if it's a building (sentry, dispenser, teleporter)
+					if (nClassId == ETFClassIds::CObjectSentrygun ||
+						nClassId == ETFClassIds::CObjectDispenser ||
+						nClassId == ETFClassIds::CObjectTeleporter)
+					{
+						auto pBuilding = trace.m_pEnt->As<C_BaseObject>();
+						// Check if it's our building
+						if (pBuilding && pBuilding->m_hBuilder() == pLocal)
+						{
+							CFG::Exploits_LegitAA_Enabled = false;
+							bDisabledForBuildingPickup = true;
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			// Not engineer anymore, reset state
+			bDisabledForBuildingPickup = false;
+		}
+	}
+
 	// Reset state
 	G::bFiring = false;
 	G::bCanPrimaryAttack = false;
@@ -433,6 +490,13 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	G::bChoking = !*pSendPacket;
 	G::nOldButtons = pCmd->buttons;
 	G::vUserCmdAngles = pCmd->viewangles;
+
+	// Disable Legit AA when taunting (impulse 201 = taunt)
+	// This prevents the taunt from being blocked by anti-aim
+	if (pCmd->impulse == 201 && CFG::Exploits_LegitAA_Enabled)
+	{
+		CFG::Exploits_LegitAA_Enabled = false;
+	}
 
 	// Silent aim handling
 	if (G::bSilentAngles || G::bPSilentAngles)

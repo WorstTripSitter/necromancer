@@ -1094,23 +1094,15 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 					const Vec3 vShootPos = pLocal->GetShootPos();
 					const float flHitchance = F::Hitchance->Calculate(pLocal, pWeapon, vShootPos, target.Position, flHitboxRadius, true, 2);
 					bShouldFire = (flHitchance >= static_cast<float>(CFG::Aimbot_Hitscan_Hitchance));
-					
-					PRINT("[Aimbot-RF] Hitchance: %.1f%% vs required %d%% -> %s\n", 
-						flHitchance, CFG::Aimbot_Hitscan_Hitchance, bShouldFire ? "FIRE" : "WAIT");
 				}
 				else
 				{
 					bShouldFire = true; // No hitchance requirement
-					PRINT("[Aimbot-RF] No hitchance requirement -> FIRE\n");
 				}
 			}
 			else
 			{
 				bShouldFire = ShouldFire(pCmd, pLocal, pWeapon, target);
-				if (CFG::Aimbot_Hitscan_Hitchance > 0)
-				{
-					PRINT("[Aimbot] ShouldFire -> %s\n", bShouldFire ? "FIRE" : "WAIT");
-				}
 			}
 
 			if (bShouldFire)
