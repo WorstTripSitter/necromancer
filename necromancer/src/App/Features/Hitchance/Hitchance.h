@@ -32,6 +32,9 @@ public:
 	int GetBulletsPerShot(C_TFWeaponBase* pWeapon);
 	int GetConsecutiveShots(C_TFWeaponBase* pWeapon);
 
+	// Minigun tapfire - calculates optimal delay based on distance
+	float GetMinigunOptimalTapfireDelay(C_TFWeaponBase* pWeapon, C_TFPlayer* pLocal, float flDistance, float flHitboxRadius);
+
 	// Main hitchance calculation
 	float Calculate(
 		C_TFPlayer* pLocal,

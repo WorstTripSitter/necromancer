@@ -732,7 +732,27 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 		const float flHitchance = F::Hitchance->Calculate(pLocal, pWeapon, vShootPos, target.Position, flHitboxRadius, bRapidFireActive, nRapidFireShots);
 		
 		if (flHitchance < static_cast<float>(CFG::Aimbot_Hitscan_Hitchance))
-			return false;
+		{
+			// Minigun: use tapfire delay based on distance and hitchance slider
+			if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+			{
+				const float flDistance = vShootPos.DistTo(target.Position);
+				const float flRequiredDelay = F::Hitchance->GetMinigunOptimalTapfireDelay(pWeapon, pLocal, flDistance, flHitboxRadius);
+				
+				if (flRequiredDelay > 0.0f)
+				{
+					const float flTimeSinceFire = (pLocal->m_nTickBase() * TICK_INTERVAL) - pWeapon->m_flLastFireTime();
+					if (flTimeSinceFire <= flRequiredDelay)
+						return false;
+					// Waited long enough, allow the shot
+				}
+				// If no delay required (close range), allow the shot
+			}
+			else
+			{
+				return false;
+			}
+		}
 	}
 
 	// FakeLag Fix - wait for optimal timing against fakelagging targets
@@ -808,10 +828,20 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 	{
 		if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
 		{
-			// OPTIMIZATION: Use squared distance to avoid sqrt
-			if (pLocal->GetAbsOrigin().DistToSqr(target.Position) >= 810000.0f) // 900^2
+			const float flDistance = pLocal->GetAbsOrigin().DistTo(target.Position);
+			
+			// Get hitbox radius for the calculation
+			float flHitboxRadius = 16.0f; // Default body
+			if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
+				flHitboxRadius = (target.AimedHitbox == HITBOX_HEAD) ? 10.0f : 16.0f;
+			
+			// Get optimal delay from hitchance system (uses hitchance slider for max delay)
+			const float flRequiredDelay = F::Hitchance->GetMinigunOptimalTapfireDelay(pWeapon, pLocal, flDistance, flHitboxRadius);
+			
+			if (flRequiredDelay > 0.0f)
 			{
-				if ((pLocal->m_nTickBase() * TICK_INTERVAL) - pWeapon->m_flLastFireTime() <= 0.25f)
+				const float flTimeSinceFire = (pLocal->m_nTickBase() * TICK_INTERVAL) - pWeapon->m_flLastFireTime();
+				if (flTimeSinceFire <= flRequiredDelay)
 					return false;
 			}
 		}
