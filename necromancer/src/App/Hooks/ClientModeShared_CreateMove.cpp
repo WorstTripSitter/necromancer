@@ -3,6 +3,8 @@
 #include "../Features/CFG.h"
 
 #include "../Features/Aimbot/Aimbot.h"
+#include "../Features/Aimbot/AimbotProjectileArc/AimbotProjectileArc.h"
+#include "../Features/amalgam_port/AimbotProjectile/AimbotProjectile.h"
 #include "../Features/EnginePrediction/EnginePrediction.h"
 #include "../Features/Misc/Misc.h"
 #include "../Features/RapidFire/RapidFire.h"
@@ -287,6 +289,24 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	// Update Amalgam Ticks
 	F::Ticks.SaveShootPos(reinterpret_cast<C_TFPlayer*>(pLocal));
 	Vars::Aimbot::General::AimType.Reset();
+
+	// ============================================
+	// RUN PROJECTILE AIMBOT FIRST (before any other feature can interfere)
+	// ============================================
+	{
+		auto pWeaponEarly = H::Entities->GetWeapon();
+		if (pLocal && pWeaponEarly && !pLocal->deadflag() && CFG::Aimbot_Active && CFG::Aimbot_Amalgam_Projectile_Active)
+		{
+			if (H::AimUtils->GetWeaponType(pWeaponEarly) == EWeaponType::PROJECTILE)
+			{
+				// Run projectile aimbot early, before misc features
+				if (CAimbotProjectileArc::IsArcWeapon(pWeaponEarly))
+					F::AimbotProjectileArc->Run(pCmd, pLocal, pWeaponEarly);
+				else
+					F::AimbotProjectile->Run(pLocal, pWeaponEarly, pCmd);
+			}
+		}
+	}
 
 	// ============================================
 	// AMALGAM ORDER: Misc features first
