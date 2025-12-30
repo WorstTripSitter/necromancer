@@ -5,6 +5,8 @@
 #include "../CFG.h"
 #include "../VisualUtils/VisualUtils.h"
 #include "../Players/Players.h"
+#include "../Materials/Materials.h"
+#include "../Outlines/Outlines.h"
 #include "../../CheaterDatabase/CheaterDatabase.h"
 
 #define multiselect(label, unique, ...) static std::vector<std::pair<const char *, bool &>> unique##multiselect = __VA_ARGS__; \
@@ -2729,6 +2731,7 @@ void CMenu::MainWindow()
 
 				multiselect("Draw", PlayerDraw, {
 					{ "Name", CFG::ESP_Players_Name },
+					{ "Tags", CFG::ESP_Players_Tags },
 					{ "Class", CFG::ESP_Players_Class },
 					{ "Class Icon", CFG::ESP_Players_Class_Icon },
 					{ "Health", CFG::ESP_Players_Health },
@@ -3897,6 +3900,14 @@ void CMenu::MainWindow()
 			if (Button("Fix Invisible Players"))
 			{
 				// Record and stop demo to refresh client-side state
+				I::EngineClient->ClientCmd_Unrestricted("record fix; stop");
+			}
+			if (Button("Fix Chams/Outlines"))
+			{
+				// Clean up custom materials and outlines so they reinitialize
+				F::Materials->CleanUp();
+				F::Outlines->CleanUp();
+				// Also use record/stop trick to refresh client render state
 				I::EngineClient->ClientCmd_Unrestricted("record fix; stop");
 			}
 		};

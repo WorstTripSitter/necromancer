@@ -406,7 +406,7 @@ void CESP::Run()
 						else if (playerPriority.Ignored)
 							nameColor = CFG::Color_Friend;
 					}
-					
+
 					H::Draw->String(
 						H::Fonts->Get(EFonts::ESP_SMALL),
 						x + (w / 2),
@@ -415,6 +415,75 @@ void CESP::Run()
 						POS_CENTERX,
 						Utils::ConvertUtf8ToWide(PlayerInfo.name).c_str()
 					);
+				}
+			}
+
+			// Draw tags (Friend, Cheater, Retard Legit, Ignored) above the player name
+			if (CFG::ESP_Players_Tags)
+			{
+				int tagOffset = 0;
+				int fontTall = H::Fonts->Get(EFonts::ESP_SMALL).m_nTall;
+				int baseY = CFG::ESP_Players_Name
+					? (y - fontTall - SPACING_Y) - fontTall - SPACING_Y
+					: (y - fontTall - SPACING_Y);
+
+				PlayerPriority playerPriority = {};
+				F::Players->GetInfo(pPlayer->entindex(), playerPriority);
+
+				// Draw Friend tag
+				if (pPlayer->IsPlayerOnSteamFriendsList())
+				{
+					H::Draw->String(
+						H::Fonts->Get(EFonts::ESP_SMALL),
+						x + (w / 2),
+						baseY - tagOffset,
+						CFG::Color_Friend,
+						POS_CENTERX,
+						"Friend"
+					);
+					tagOffset += fontTall + SPACING_Y;
+				}
+
+				// Draw Cheater tag
+				if (playerPriority.Cheater)
+				{
+					H::Draw->String(
+						H::Fonts->Get(EFonts::ESP_SMALL),
+						x + (w / 2),
+						baseY - tagOffset,
+						CFG::Color_Cheater,
+						POS_CENTERX,
+						"Cheater"
+					);
+					tagOffset += fontTall + SPACING_Y;
+				}
+
+				// Draw Retard Legit tag
+				if (playerPriority.RetardLegit)
+				{
+					H::Draw->String(
+						H::Fonts->Get(EFonts::ESP_SMALL),
+						x + (w / 2),
+						baseY - tagOffset,
+						CFG::Color_RetardLegit,
+						POS_CENTERX,
+						"Retard Legit"
+					);
+					tagOffset += fontTall + SPACING_Y;
+				}
+
+				// Draw Ignored tag
+				if (playerPriority.Ignored)
+				{
+					H::Draw->String(
+						H::Fonts->Get(EFonts::ESP_SMALL),
+						x + (w / 2),
+						baseY - tagOffset,
+						CFG::Color_Friend,
+						POS_CENTERX,
+						"Ignored"
+					);
+					tagOffset += fontTall + SPACING_Y;
 				}
 			}
 

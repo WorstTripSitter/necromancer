@@ -162,6 +162,53 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	auto pLocal = H::Entities->GetLocal();
 	auto pWeapon = H::Entities->GetWeapon();
 
+	// Disable Legit AA when taunting or about to taunt
+	// This must run BEFORE anti-aim so the taunt works properly
+	// We block the taunt command on the first tick, disable AA, then let it through next tick
+	{
+		static bool bDisabledForTaunt = false;
+		static bool bWaitingToTaunt = false;  // True when we blocked taunt and need to send it next tick
+
+		if (pLocal)
+		{
+			// Check if we're currently taunting
+			const bool bIsTaunting = pLocal->InCond(TF_COND_TAUNTING);
+
+			// Check if user is trying to taunt (impulse 201)
+			const bool bTryingToTaunt = (pCmd->impulse == 201);
+
+			// If we were waiting to taunt and AA is now disabled, send the taunt
+			if (bWaitingToTaunt && !CFG::Exploits_LegitAA_Enabled)
+			{
+				pCmd->impulse = 201;  // Re-add the taunt command
+				bWaitingToTaunt = false;
+			}
+
+			// If user is trying to taunt while AA is enabled, block it and disable AA first
+			if (bTryingToTaunt && CFG::Exploits_LegitAA_Enabled && !bWaitingToTaunt)
+			{
+				pCmd->impulse = 0;  // Block the taunt command this tick
+				CFG::Exploits_LegitAA_Enabled = false;
+				bDisabledForTaunt = true;
+				bWaitingToTaunt = true;  // Send taunt next tick
+			}
+
+			// Also disable AA while actively taunting (in case it got re-enabled somehow)
+			if (bIsTaunting && CFG::Exploits_LegitAA_Enabled)
+			{
+				CFG::Exploits_LegitAA_Enabled = false;
+				bDisabledForTaunt = true;
+			}
+
+			// Re-enable Legit AA once we're done taunting
+			if (bDisabledForTaunt && !bIsTaunting && !bWaitingToTaunt)
+			{
+				CFG::Exploits_LegitAA_Enabled = true;
+				bDisabledForTaunt = false;
+			}
+		}
+	}
+
 	// Early check: Temporarily disable Legit AA when engineer tries to pick up a building
 	// This must run BEFORE anti-aim so the pickup works on the first try
 	{
@@ -516,13 +563,6 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	G::bChoking = !*pSendPacket;
 	G::nOldButtons = pCmd->buttons;
 	G::vUserCmdAngles = pCmd->viewangles;
-
-	// Disable Legit AA when taunting (impulse 201 = taunt)
-	// This prevents the taunt from being blocked by anti-aim
-	if (pCmd->impulse == 201 && CFG::Exploits_LegitAA_Enabled)
-	{
-		CFG::Exploits_LegitAA_Enabled = false;
-	}
 
 	// Silent aim handling
 	if (G::bSilentAngles || G::bPSilentAngles)
