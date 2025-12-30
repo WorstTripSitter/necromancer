@@ -1,6 +1,70 @@
 #include "../../SDK/SDK.h"
 
 #include "../Features/CFG.h"
+#include "../Features/FakeAngle/FakeAngle.h"
+
+// Taunt delay state
+namespace TauntState
+{
+	bool bDisabledForTaunt = false;
+	int nTauntDelayTicks = 0;
+	bool bWasLegitAAEnabled = false;
+	bool bWasAntiAimEnabled = false;
+	std::string sPendingTauntCmd = "";
+	bool bTauntExecuted = false;  // Track if taunt was executed, wait for it to end
+	int nWaitForTauntStartTicks = 0;  // Wait a few ticks after executing for taunt to actually start
+}
+
+// Called from CreateMove every tick to handle taunt delay
+void ProcessTauntDelay()
+{
+	if (!TauntState::bDisabledForTaunt)
+		return;
+
+	auto pLocal = H::Entities->GetLocal();
+	if (!pLocal)
+		return;
+
+	// If taunt was executed, wait for it to end before re-enabling AA
+	if (TauntState::bTauntExecuted)
+	{
+		// Wait a few ticks for the taunt to actually start
+		if (TauntState::nWaitForTauntStartTicks > 0)
+		{
+			TauntState::nWaitForTauntStartTicks--;
+			return;
+		}
+		
+		// Check if taunt ended (or never started)
+		if (!pLocal->InCond(TF_COND_TAUNTING))
+		{
+			// Taunt ended, re-enable AA
+			CFG::Exploits_LegitAA_Enabled = TauntState::bWasLegitAAEnabled;
+			CFG::Exploits_AntiAim_Enabled = TauntState::bWasAntiAimEnabled;
+			TauntState::bDisabledForTaunt = false;
+			TauntState::bTauntExecuted = false;
+			I::CVar->ConsoleColorPrintf({ 0, 255, 0, 255 }, "[TAUNT] Taunt ended, re-enabled AA\n");
+		}
+		return;
+	}
+
+	// Waiting for delay ticks before executing taunt
+	if (TauntState::nTauntDelayTicks > 0)
+	{
+		TauntState::nTauntDelayTicks--;
+		return;
+	}
+
+	// Delay complete, execute the taunt
+	if (!TauntState::sPendingTauntCmd.empty())
+	{
+		I::CVar->ConsoleColorPrintf({ 0, 255, 0, 255 }, "[TAUNT] Executing taunt after delay: %s\n", TauntState::sPendingTauntCmd.c_str());
+		I::EngineClient->ClientCmd_Unrestricted(TauntState::sPendingTauntCmd.c_str());
+		TauntState::sPendingTauntCmd = "";
+		TauntState::bTauntExecuted = true;  // Now wait for taunt to end
+		TauntState::nWaitForTauntStartTicks = 10;  // Wait 10 ticks for taunt to actually start
+	}
+}
 
 MAKE_HOOK(IVEngineClient013_ClientCmd, Memory::GetVFunc(I::EngineClient, 7), void, __fastcall,
 	IVEngineClient013* ecx, const char* szCmdString)
@@ -216,6 +280,52 @@ MAKE_HOOK(IVEngineClient013_ClientCmd, Memory::GetVFunc(I::EngineClient, 7), voi
 
 	if (runFakeTaunt())
 		return;
+
+	// Check if this is a taunt command and AA is enabled - if so, delay it
+	{
+		static constexpr auto HashTaunt = HASH_CT("taunt");
+		static constexpr auto HashTaunt0 = HASH_CT("taunt 0");
+		static constexpr auto HashTaunt1 = HASH_CT("taunt 1");
+		static constexpr auto HashTaunt2 = HASH_CT("taunt 2");
+		static constexpr auto HashTaunt3 = HASH_CT("taunt 3");
+		static constexpr auto HashTaunt4 = HASH_CT("taunt 4");
+		static constexpr auto HashTaunt5 = HASH_CT("taunt 5");
+		static constexpr auto HashTaunt6 = HASH_CT("taunt 6");
+		static constexpr auto HashTaunt7 = HASH_CT("taunt 7");
+		static constexpr auto HashTaunt8 = HASH_CT("taunt 8");
+		static constexpr auto HashPlusTaunt = HASH_CT("+taunt");
+
+		const auto cmdHash = HASH_RT(szCmdString);
+		const bool bIsTauntCmd = (cmdHash == HashTaunt || cmdHash == HashTaunt0 || cmdHash == HashTaunt1 ||
+			cmdHash == HashTaunt2 || cmdHash == HashTaunt3 || cmdHash == HashTaunt4 ||
+			cmdHash == HashTaunt5 || cmdHash == HashTaunt6 || cmdHash == HashTaunt7 ||
+			cmdHash == HashTaunt8 || cmdHash == HashPlusTaunt);
+
+		if (bIsTauntCmd)
+		{
+			// If AA is enabled and we're not already processing a taunt, block and delay
+			if ((CFG::Exploits_AntiAim_Enabled || CFG::Exploits_LegitAA_Enabled) && !TauntState::bDisabledForTaunt)
+			{
+				I::CVar->ConsoleColorPrintf({ 255, 255, 0, 255 }, "[TAUNT] Blocking taunt, disabling AA, waiting 3 ticks\n");
+				
+				// Store the taunt command to execute later
+				TauntState::sPendingTauntCmd = szCmdString;
+				
+				// Save and disable AA
+				TauntState::bWasLegitAAEnabled = CFG::Exploits_LegitAA_Enabled;
+				TauntState::bWasAntiAimEnabled = CFG::Exploits_AntiAim_Enabled;
+				CFG::Exploits_LegitAA_Enabled = false;
+				CFG::Exploits_AntiAim_Enabled = false;
+				
+				// Set state and delay
+				TauntState::bDisabledForTaunt = true;
+				TauntState::nTauntDelayTicks = 10;  // Wait 44 ticks before executing taunt
+				TauntState::bTauntExecuted = false;
+				
+				return;  // Don't execute the taunt yet
+			}
+		}
+	}
 
 	CALL_ORIGINAL(ecx, szCmdString);
 }

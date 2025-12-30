@@ -19,6 +19,9 @@
 #include "../Features/amalgam_port/Ticks/Ticks.h"
 #include "../Features/amalgam_port/AmalgamCompat.h"
 
+// Taunt delay processing - defined in IVEngineClient013_ClientCmd.cpp
+extern void ProcessTauntDelay();
+
 MAKE_SIGNATURE(ValidateUserCmd_, "client.dll", "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B F9 41 8B D8", 0, 0);
 MAKE_HOOK(ValidateUserCmd, Signatures::ValidateUserCmd_.Get(), void, __fastcall, void* rcx, CUserCmd* cmd,
 	int sequence_number) {
@@ -100,6 +103,11 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	if (!pCmd || !pCmd->command_number)
 		return CALL_ORIGINAL(ecx, flInputSampleTime, pCmd);
 
+	// ============================================
+	// TAUNT DELAY HANDLING - Process pending taunt with tick delay
+	// ============================================
+	ProcessTauntDelay();
+
 	CUserCmd* pBufferCmd = I::Input->GetUserCmd(pCmd->command_number);
 	if (!pBufferCmd)
 		pBufferCmd = pCmd;
@@ -161,53 +169,6 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 
 	auto pLocal = H::Entities->GetLocal();
 	auto pWeapon = H::Entities->GetWeapon();
-
-	// Disable Legit AA when taunting or about to taunt
-	// This must run BEFORE anti-aim so the taunt works properly
-	// We block the taunt command on the first tick, disable AA, then let it through next tick
-	{
-		static bool bDisabledForTaunt = false;
-		static bool bWaitingToTaunt = false;  // True when we blocked taunt and need to send it next tick
-
-		if (pLocal)
-		{
-			// Check if we're currently taunting
-			const bool bIsTaunting = pLocal->InCond(TF_COND_TAUNTING);
-
-			// Check if user is trying to taunt (impulse 201)
-			const bool bTryingToTaunt = (pCmd->impulse == 201);
-
-			// If we were waiting to taunt and AA is now disabled, send the taunt
-			if (bWaitingToTaunt && !CFG::Exploits_LegitAA_Enabled)
-			{
-				pCmd->impulse = 201;  // Re-add the taunt command
-				bWaitingToTaunt = false;
-			}
-
-			// If user is trying to taunt while AA is enabled, block it and disable AA first
-			if (bTryingToTaunt && CFG::Exploits_LegitAA_Enabled && !bWaitingToTaunt)
-			{
-				pCmd->impulse = 0;  // Block the taunt command this tick
-				CFG::Exploits_LegitAA_Enabled = false;
-				bDisabledForTaunt = true;
-				bWaitingToTaunt = true;  // Send taunt next tick
-			}
-
-			// Also disable AA while actively taunting (in case it got re-enabled somehow)
-			if (bIsTaunting && CFG::Exploits_LegitAA_Enabled)
-			{
-				CFG::Exploits_LegitAA_Enabled = false;
-				bDisabledForTaunt = true;
-			}
-
-			// Re-enable Legit AA once we're done taunting
-			if (bDisabledForTaunt && !bIsTaunting && !bWaitingToTaunt)
-			{
-				CFG::Exploits_LegitAA_Enabled = true;
-				bDisabledForTaunt = false;
-			}
-		}
-	}
 
 	// Early check: Temporarily disable Legit AA when engineer tries to pick up a building
 	// This must run BEFORE anti-aim so the pickup works on the first try
