@@ -20,13 +20,35 @@ bool IsRapidFireWeapon(C_TFWeaponBase* pWeapon)
 
 bool CRapidFire::ShouldStart(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon)
 {
-	if (G::nTicksSinceCanFire < 24 || G::nTargetIndex <= 1 || !G::bFiring || Shifting::bShifting || Shifting::bRecharging || Shifting::bShiftingWarp)
+	if (G::nTargetIndex <= 1 || !G::bFiring || Shifting::bShifting || Shifting::bRecharging || Shifting::bShiftingWarp)
 		return false;
 
-	// When anti-cheat is enabled, limit to 8 ticks max
-	const int nEffectiveTicks = CFG::Misc_AntiCheat_Enabled 
-		? std::min(CFG::Exploits_RapidFire_Ticks, 8) 
-		: CFG::Exploits_RapidFire_Ticks;
+	// Rapid-fire weapons (minigun, pistol, SMG) don't need the 24-tick wait
+	// They fire continuously so the wait doesn't make sense
+	if (!IsRapidFireWeapon(pWeapon))
+	{
+		if (G::nTicksSinceCanFire < 24)
+			return false;
+	}
+
+	// Calculate effective ticks needed
+	// If slider is at 23 (MAX), use all available ticks but require minimum 2
+	int nEffectiveTicks;
+	if (CFG::Misc_AntiCheat_Enabled)
+	{
+		nEffectiveTicks = std::min(CFG::Exploits_RapidFire_Ticks, 8);
+	}
+	else if (CFG::Exploits_RapidFire_Ticks >= 23)
+	{
+		// MAX mode - require at least 2 ticks to do anything useful
+		if (Shifting::nAvailableTicks < 2)
+			return false;
+		nEffectiveTicks = Shifting::nAvailableTicks;
+	}
+	else
+	{
+		nEffectiveTicks = CFG::Exploits_RapidFire_Ticks;
+	}
 
 	if (Shifting::nAvailableTicks < nEffectiveTicks)
 		return false;
@@ -86,45 +108,24 @@ void CRapidFire::Run(CUserCmd* pCmd, bool* pSendPacket)
 		m_bShiftSilentAngles = G::bSilentAngles || G::bPSilentAngles;
 		m_bSetCommand = false;
 
-		// Save shift start position and ground state (from Amalgam)
+		// Save shift start position and ground state
 		m_vShiftStart = pLocal->m_vecOrigin();
 		m_bStartedShiftOnGround = pLocal->m_fFlags() & FL_ONGROUND;
 
-		// Save to Shifting namespace for cross-system access (from Amalgam)
-		Shifting::vShiftStartPos = m_vShiftStart;
-		Shifting::bStartedOnGround = m_bStartedShiftOnGround;
-		Shifting::SavedCmd = *pCmd;
-		Shifting::bSavedAngles = G::bSilentAngles || G::bPSilentAngles;
-		Shifting::bHasSavedCmd = true;
-		
-		// Save target info for aimbot during shifted ticks
-		Shifting::nRapidFireTargetIndex = G::nTargetIndex;
-
-		/*if (CFG::Exploits_RapidFire_Antiwarp)
-		{
-			Vec3 vAngle = {};
-			Math::VectorAngles(pLocal->m_vecVelocity(), vAngle);
-
-			pCmd->viewangles.x = 90.0f;
-			pCmd->viewangles.y = vAngle.y;
-			pCmd->forwardmove = pCmd->sidemove = 0.0f;
-
-			G::bSilentAngles = true;
-		}*/
-
-		// Remove attack button on the real tick so both shots fire during shifted ticks
+		// Remove attack button on the real tick so shots fire during shifted ticks
 		pCmd->buttons &= ~IN_ATTACK;
+		
+		// Minigun special handling - keep spin up (attack2) so it stays revved
+		if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+		{
+			pCmd->buttons |= IN_ATTACK2;
+		}
 
 		*pSendPacket = true;
 	}
 	else
 	{
-		// Clear saved command state when DT is not active and not shifting (from Amalgam)
-		if (!Shifting::bShifting && !Shifting::bShiftingWarp)
-		{
-			Shifting::bHasSavedCmd = false;
-			Shifting::bSavedAngles = false;
-		}
+		// Nothing to do when not starting DT
 	}
 }
 
@@ -138,73 +139,30 @@ bool CRapidFire::ShouldExitCreateMove(CUserCmd* pCmd)
 	// Only handle rapid fire shifting, not warp shifting
 	if (Shifting::bShiftingRapidFire)
 	{
-		// During rapid fire shifting, we want to:
-		// 1. Restore movement from saved command (anti-warp, etc.)
-		// 2. Let aimbot run to recalculate angles for each tick
-		// 3. Set attack button for each shifted tick
+		// Replay the saved command exactly - don't recalculate angles
+		// The aimbot already calculated the correct angles on the first tick
+		m_ShiftCmd.command_number = pCmd->command_number;
 		
-		if (Shifting::bHasSavedCmd)
+		// Copy the entire saved command
+		*pCmd = m_ShiftCmd;
+		
+		// Ensure attack button is set
+		pCmd->buttons |= IN_ATTACK;
+		
+		// Apply anti-warp if enabled and started on ground
+		if (CFG::Exploits_RapidFire_Antiwarp && m_bStartedShiftOnGround)
 		{
-			// Restore movement but NOT viewangles - aimbot will set those
-			pCmd->forwardmove = Shifting::SavedCmd.forwardmove;
-			pCmd->sidemove = Shifting::SavedCmd.sidemove;
-			pCmd->upmove = Shifting::SavedCmd.upmove;
-			pCmd->buttons = Shifting::SavedCmd.buttons;
-			pCmd->impulse = Shifting::SavedCmd.impulse;
-			pCmd->weaponselect = Shifting::SavedCmd.weaponselect;
-			pCmd->weaponsubtype = Shifting::SavedCmd.weaponsubtype;
-			
-			// Apply anti-warp if enabled and started on ground
-			if (CFG::Exploits_RapidFire_Antiwarp && Shifting::bStartedOnGround)
-			{
-				const float flTicks = std::max(14.f, std::min(22.f, static_cast<float>(CFG::Exploits_RapidFire_Ticks)));
-				const float flScale = Math::RemapValClamped(flTicks, 14.f, 22.f, 0.605f, 1.f);
-				SDKUtils::WalkTo(pCmd, pLocal->m_vecOrigin(), Shifting::vShiftStartPos, flScale);
-			}
-			
-			// Set attack button for this shifted tick
-			pCmd->buttons |= IN_ATTACK;
-			
-			// Mark that we're firing during rapid fire shift
-			G::bFiring = true;
-			
-			// Restore target index so aimbot knows what to aim at
-			G::nTargetIndex = Shifting::nRapidFireTargetIndex;
+			const float flTicks = std::max(14.f, std::min(24.f, static_cast<float>(CFG::Exploits_RapidFire_Ticks)));
+			const float flScale = Math::RemapValClamped(flTicks, 14.f, 24.f, 0.605f, 1.f);
+			SDKUtils::WalkTo(pCmd, pLocal->m_vecOrigin(), m_vShiftStart, flScale);
 		}
-		else
-		{
-			// Fallback to member variable approach (legacy behavior)
-			m_ShiftCmd.command_number = pCmd->command_number;
-
-			if (!m_bSetCommand)
-			{
-				// Restore movement but NOT viewangles
-				pCmd->forwardmove = m_ShiftCmd.forwardmove;
-				pCmd->sidemove = m_ShiftCmd.sidemove;
-				pCmd->upmove = m_ShiftCmd.upmove;
-				pCmd->buttons = m_ShiftCmd.buttons;
-				pCmd->impulse = m_ShiftCmd.impulse;
-				pCmd->weaponselect = m_ShiftCmd.weaponselect;
-				pCmd->weaponsubtype = m_ShiftCmd.weaponsubtype;
-				m_bSetCommand = true;
-			}
-
-			if (CFG::Exploits_RapidFire_Antiwarp && m_bStartedShiftOnGround)
-			{
-				const float moveScale = Math::RemapValClamped(static_cast<float>(CFG::Exploits_RapidFire_Ticks), 14.0f, 22.0f, 0.605f, 1.0f);
-				SDKUtils::WalkTo(pCmd, pLocal->m_vecOrigin(), m_vShiftStart, moveScale);
-			}
-			
-			// Set attack button for this shifted tick
-			pCmd->buttons |= IN_ATTACK;
-			
-			// Mark that we're firing during rapid fire shift
-			G::bFiring = true;
-		}
-
-		// Return false to let aimbot run and recalculate angles for this tick
-		// The aimbot will update viewangles based on current target position
-		return false;
+		
+		// Mark that we're firing during rapid fire shift
+		G::bFiring = true;
+		G::bSilentAngles = m_bShiftSilentAngles;
+		
+		// Return true to exit CreateMove early - we don't need aimbot to recalculate
+		return true;
 	}
 
 	return false;
@@ -243,8 +201,8 @@ int CRapidFire::GetTicks(C_TFWeaponBase* pWeapon)
 	if (!pWeapon || !IsWeaponSupported(pWeapon))
 		return 0;
 
-	// Not enough ticks since can fire (threshold 24)
-	if (G::nTicksSinceCanFire < 24)
+	// Not enough ticks since can fire (threshold 24) - skip for rapid-fire weapons
+	if (!IsRapidFireWeapon(pWeapon) && G::nTicksSinceCanFire < 24)
 		return 0;
 
 	// Currently shifting or recharging
@@ -252,5 +210,9 @@ int CRapidFire::GetTicks(C_TFWeaponBase* pWeapon)
 		return 0;
 
 	// Return available ticks capped by config
+	// If slider is at 23 (MAX), return all available ticks
+	if (CFG::Exploits_RapidFire_Ticks >= 23)
+		return Shifting::nAvailableTicks;
+	
 	return std::min(CFG::Exploits_RapidFire_Ticks, Shifting::nAvailableTicks);
 }

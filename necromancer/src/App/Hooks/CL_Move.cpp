@@ -117,8 +117,18 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 		Shifting::bShifting = true;
 		Shifting::bShiftingRapidFire = true;
 
-		int nTicks = std::min(CFG::Exploits_RapidFire_Ticks, nMaxRechargeTicks);
-		nTicks = std::min(nTicks, Shifting::nAvailableTicks);
+		// Calculate ticks to shift
+		// If slider is at 23 (MAX), use all available ticks
+		int nTicks;
+		if (CFG::Exploits_RapidFire_Ticks >= 23)
+		{
+			nTicks = std::min(Shifting::nAvailableTicks, nMaxRechargeTicks);
+		}
+		else
+		{
+			nTicks = std::min(CFG::Exploits_RapidFire_Ticks, nMaxRechargeTicks);
+			nTicks = std::min(nTicks, Shifting::nAvailableTicks);
+		}
 		
 		for (int n = 0; n < nTicks; n++)
 		{
