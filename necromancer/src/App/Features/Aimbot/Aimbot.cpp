@@ -2,7 +2,9 @@
 
 #include "AimbotHitscan/AimbotHitscan.h"
 #include "AimbotMelee/AimbotMelee.h"
-#include "AimbotProjectile/AimbotProjectile.h"
+#include "AimbotWrangler/AimbotWrangler.h"
+#include "../amalgam_port/AimbotProjectile/AimbotProjectile.h"
+#include "AimbotProjectileArc/AimbotProjectileArc.h"
 #include "../RapidFire/RapidFire.h"
 
 #include "../CFG.h"
@@ -40,6 +42,13 @@ void CAimbot::RunMain(CUserCmd* pCmd)
 		|| pWeapon->m_iItemDefinitionIndex() == Soldier_m_RocketJumper || pWeapon->m_iItemDefinitionIndex() == Demoman_s_StickyJumper)
 		return;
 
+	// Wrangler gets special handling - it controls the sentry gun
+	if (F::AimbotWrangler->IsWrangler(pWeapon))
+	{
+		F::AimbotWrangler->Run(pCmd, pLocal, pWeapon);
+		return;
+	}
+
 	switch (H::AimUtils->GetWeaponType(pWeapon))
 	{
 		case EWeaponType::HITSCAN:
@@ -50,7 +59,15 @@ void CAimbot::RunMain(CUserCmd* pCmd)
 
 		case EWeaponType::PROJECTILE:
 		{
-			F::AimbotProjectile->Run(pCmd, pLocal, pWeapon);
+			if (CFG::Aimbot_Amalgam_Projectile_Active)
+			{
+				// All arc weapons (pipes, stickies, huntsman, etc.) -> arc aimbot
+				// Rockets, etc. -> Amalgam projectile aimbot
+				if (CAimbotProjectileArc::IsArcWeapon(pWeapon))
+					F::AimbotProjectileArc->Run(pCmd, pLocal, pWeapon);
+				else
+					F::AimbotProjectile->Run(pLocal, pWeapon, pCmd);
+			}
 			break;
 		}
 
@@ -93,7 +110,20 @@ void CAimbot::Run(CUserCmd* pCmd)
 
 			case EWeaponType::PROJECTILE:
 			{
-				G::bFiring = F::AimbotProjectile->IsFiring(pCmd, pLocal, pWeapon);
+				// Route firing detection based on weapon type
+				if (CAimbotProjectileArc::IsArcWeapon(pWeapon))
+					G::bFiring = F::AimbotProjectileArc->IsFiring(pCmd, pLocal, pWeapon);
+				else
+				{
+					// For doubletap to work, we need G::bFiring to be true when:
+					// 1. We're pressing attack AND can fire normally, OR
+					// 2. We have a valid aimbot target AND pressing attack AND have DT ticks available
+					// This allows RapidFire to trigger even when weapon is on cooldown
+					bool bNormalFiring = (pCmd->buttons & IN_ATTACK) && G::bCanPrimaryAttack;
+					bool bDTFiring = (pCmd->buttons & IN_ATTACK) && G::nTargetIndex > 1 && 
+						F::RapidFire->IsWeaponSupported(pWeapon) && Shifting::nAvailableTicks >= CFG::Exploits_RapidFire_Ticks;
+					G::bFiring = bNormalFiring || bDTFiring;
+				}
 				break;
 			}
 

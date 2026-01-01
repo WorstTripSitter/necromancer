@@ -3,6 +3,8 @@
 #include "../Features/CFG.h"
 
 #include "../Features/Aimbot/Aimbot.h"
+#include "../Features/Aimbot/AimbotProjectileArc/AimbotProjectileArc.h"
+#include "../Features/amalgam_port/AimbotProjectile/AimbotProjectile.h"
 #include "../Features/EnginePrediction/EnginePrediction.h"
 #include "../Features/Misc/Misc.h"
 #include "../Features/RapidFire/RapidFire.h"
@@ -13,9 +15,18 @@
 #include "../Features/FakeLag/FakeLag.h"
 #include "../Features/FakeAngle/FakeAngle.h"
 #include "../Features/ProjectileDodge/ProjectileDodge.h"
-// #include "../Features/Misc/AntiCheatCompat/AntiCheatCompat.h"
+#include "../Features/Misc/AntiCheatCompat/AntiCheatCompat.h"
 #include "../Features/amalgam_port/Ticks/Ticks.h"
 #include "../Features/amalgam_port/AmalgamCompat.h"
+
+// Taunt delay processing - defined in IVEngineClient013_ClientCmd.cpp
+extern void ProcessTauntDelay();
+
+MAKE_SIGNATURE(ValidateUserCmd_, "client.dll", "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B F9 41 8B D8", 0, 0);
+MAKE_HOOK(ValidateUserCmd, Signatures::ValidateUserCmd_.Get(), void, __fastcall, void* rcx, CUserCmd* cmd,
+	int sequence_number) {
+	return;
+}
 
 // Local animations - Amalgam style
 // This updates the local player's animation state based on the REAL angles (not fake)
@@ -76,7 +87,7 @@ static inline bool AntiAimCheck(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUs
 		&& I::ClientState->chokedcommands < F::FakeAngle->AntiAimTicks();
 }
 
-MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21), bool, __fastcall,
+MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool, __fastcall,
 	CClientModeShared* ecx, float flInputSampleTime, CUserCmd* pCmd)
 {
 	// Reset per-frame state
@@ -91,6 +102,11 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 
 	if (!pCmd || !pCmd->command_number)
 		return CALL_ORIGINAL(ecx, flInputSampleTime, pCmd);
+
+	// ============================================
+	// TAUNT DELAY HANDLING - Process pending taunt with tick delay
+	// ============================================
+	ProcessTauntDelay();
 
 	CUserCmd* pBufferCmd = I::Input->GetUserCmd(pCmd->command_number);
 	if (!pBufferCmd)
@@ -289,6 +305,24 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	Vars::Aimbot::General::AimType.Reset();
 
 	// ============================================
+	// RUN PROJECTILE AIMBOT FIRST (before any other feature can interfere)
+	// ============================================
+	{
+		auto pWeaponEarly = H::Entities->GetWeapon();
+		if (pLocal && pWeaponEarly && !pLocal->deadflag() && CFG::Aimbot_Active && CFG::Aimbot_Amalgam_Projectile_Active)
+		{
+			if (H::AimUtils->GetWeaponType(pWeaponEarly) == EWeaponType::PROJECTILE)
+			{
+				// Run projectile aimbot early, before misc features
+				if (CAimbotProjectileArc::IsArcWeapon(pWeaponEarly))
+					F::AimbotProjectileArc->Run(pCmd, pLocal, pWeaponEarly);
+				else
+					F::AimbotProjectile->Run(pLocal, pWeaponEarly, pCmd);
+			}
+		}
+	}
+
+	// ============================================
 	// AMALGAM ORDER: Misc features first
 	// ============================================
 	F::Misc->Bunnyhop(pCmd);
@@ -476,7 +510,7 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	// ============================================
 	// AMALGAM ORDER: AntiCheatCompatibility
 	// ============================================
-//	F::AntiCheatCompat->ProcessCommand(pCmd, pSendPacket);
+	F::AntiCheatCompat->ProcessCommand(pCmd, pSendPacket);
 
 	// Store bones when packet is sent (for fakelag visualization)
 	if (*pSendPacket)
@@ -490,13 +524,6 @@ MAKE_HOOK(ClientModeShared_CreateMove, Memory::GetVFunc(I::ClientModeShared, 21)
 	G::bChoking = !*pSendPacket;
 	G::nOldButtons = pCmd->buttons;
 	G::vUserCmdAngles = pCmd->viewangles;
-
-	// Disable Legit AA when taunting (impulse 201 = taunt)
-	// This prevents the taunt from being blocked by anti-aim
-	if (pCmd->impulse == 201 && CFG::Exploits_LegitAA_Enabled)
-	{
-		CFG::Exploits_LegitAA_Enabled = false;
-	}
 
 	// Silent aim handling
 	if (G::bSilentAngles || G::bPSilentAngles)

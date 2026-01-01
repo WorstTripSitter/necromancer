@@ -324,8 +324,9 @@ int CCritHack::GetCritRequest(CUserCmd* pCmd, C_TFWeaponBase* pWeapon)
 // Main run function - called from CreateMove
 void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 {
-	// During shifting (doubletap), don't reset forced state - keep using the same forced command
-	// This ensures all shifted ticks use the same crit seed
+	// Reset forced state at the start of each tick
+	// Unlike doubletap where we need to maintain state, for normal attacks we find a new command each time
+	// This matches Amalgam's approach which is simpler and more reliable
 	if (!Shifting::bShiftingRapidFire && !Shifting::bRapidFireWantShift)
 	{
 		m_bForcingCrit = false;
@@ -343,7 +344,12 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 	if (pLocal->IsCritBoosted() || pWeapon->m_flCritTime() > I::GlobalVars->curtime || !WeaponCanCrit(pWeapon))
 		return;
 
-	// Attack detection - check for doubletap/shifting first
+	// NOTE: Minigun IN_ATTACK2 removal moved to after safe mode check
+	// so we don't unrev the minigun when waiting for a crit
+	
+	// Attack detection - check for doubletap/shifting first (like Amalgam does)
+	// bRapidFireWantShift = first tick when DT is triggered (before shifting starts)
+	// bShiftingRapidFire = during the shifted ticks (more specific than bShifting)
 	bool bDoubletap = Shifting::bShiftingRapidFire || Shifting::bRapidFireWantShift;
 	bool bAttacking = bDoubletap;
 	
@@ -357,13 +363,21 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 		}
 		else if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
 		{
-			// Minigun: check current command for IN_ATTACK (aimbot may have added it)
+			// Minigun: check current command for IN_ATTACK
+			// The minigun fires when IN_ATTACK is pressed and it's spun up
 			bAttacking = (pCmd->buttons & IN_ATTACK);
+		}
+		else if (pWeapon->GetWeaponID() == TF_WEAPON_FLAMETHROWER)
+		{
+			// Flamethrower: similar to minigun
+			bAttacking = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
 		}
 		else
 		{
-			// For other weapons, use G::Attacking or check buttons directly
-			bAttacking = G::Attacking || (G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK));
+			// For other weapons, use SDK::IsAttacking with current command
+			// This handles all the special cases (charge weapons, etc.)
+			int iAttackResult = SDK::IsAttacking(pLocal, pWeapon, pCmd, false);
+			bAttacking = (iAttackResult > 0);
 			
 			// Beggar's Bazooka special case
 			if (!bAttacking)
@@ -393,24 +407,50 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 	if (iRequest == CritRequest_Any)
 		return;
 
+	// Anti-cheat compatibility mode (skip if crit detection bypass is enabled)
+	if (CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_SkipCritDetection)
 	{
-		// During shifting, reuse the already-found forced command for all ticks
-		// This ensures all doubletap shots use the same crit seed
+		// Safe mode: only fire when current command matches our request
+		if (!IsCritCommand(pCmd->command_number, pWeapon, iRequest == CritRequest_Crit, false))
+		{
+			// Block the attack - but preserve minigun rev state
+			pCmd->buttons &= ~IN_ATTACK;
+			
+			// For minigun: restore IN_ATTACK2 so it stays revved while waiting
+			if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+			{
+				// Check if player was holding attack2 (rev) before we modified buttons
+				if (G::OriginalCmd.buttons & IN_ATTACK2)
+					pCmd->buttons |= IN_ATTACK2;
+			}
+			
+			// DON'T reset viewangles - keep aimbot angles so they're ready when crit comes
+			// Only reset psilent flag since we're not actually firing
+			G::bPSilentAngles = false;
+			return; // Don't proceed to minigun button handling below
+		}
+	}
+	else
+	{
+		// Normal mode: find a command number that will produce crit/non-crit
+		// This matches Amalgam's approach - find a new command each time
+		// During doubletap, reuse the stored command to ensure all shifted ticks use the same seed
 		if (bDoubletap && m_iForcedCommandNumber != 0)
 		{
+			// Reuse the previously found command number for doubletap
 			pCmd->command_number = m_iForcedCommandNumber;
 			pCmd->random_seed = MD5_PseudoRandom(m_iForcedCommandNumber) & std::numeric_limits<int>::max();
 		}
 		else
 		{
-			// Normal mode: find a command number that will produce crit/non-crit
+			// Find a command number that produces the desired crit/non-crit result
 			int iCommand = GetCritCommand(pWeapon, pCmd->command_number, iRequest == CritRequest_Crit);
 			if (iCommand)
 			{
 				pCmd->command_number = iCommand;
 				pCmd->random_seed = MD5_PseudoRandom(iCommand) & std::numeric_limits<int>::max();
 				
-				// Store forced state so CalcIsAttackCritical hook can use it
+				// Store forced state for doubletap and CalcIsAttackCritical hook
 				m_iForcedCommandNumber = iCommand;
 				m_iForcedSeed = CommandToSeed(iCommand);
 				m_bForcingCrit = (iRequest == CritRequest_Crit);
@@ -428,7 +468,11 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 // Check if aimbot should fire - returns false if safe mode would block the shot
 // Aimbots should call this BEFORE adding IN_ATTACK
 bool CCritHack::ShouldAllowFire(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
-{	
+{
+	// If safe mode is not enabled, always allow
+	if (!CFG::Misc_AntiCheat_Enabled || CFG::Misc_AntiCheat_SkipCritDetection)
+		return true;
+	
 	// If no weapon or player, allow (let other code handle it)
 	if (!pWeapon || !pLocal || pLocal->deadflag())
 		return true;
@@ -464,7 +508,8 @@ int CCritHack::PredictCmdNum(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserC
 {
 	auto getCmdNum = [&](int iCommandNumber)
 	{
-		if (!pWeapon || !pLocal || pLocal->deadflag() || !I::EngineClient->IsInGame() || pLocal->IsCritBoosted() || pWeapon->m_flCritTime() > I::GlobalVars->curtime || !WeaponCanCrit(pWeapon))
+		if (!pWeapon || !pLocal || pLocal->deadflag() || !I::EngineClient->IsInGame() || CFG::Misc_AntiCheat_Enabled
+			|| pLocal->IsCritBoosted() || pWeapon->m_flCritTime() > I::GlobalVars->curtime || !WeaponCanCrit(pWeapon))
 			return iCommandNumber;
 
 		UpdateInfo(pLocal, pWeapon);
@@ -841,6 +886,13 @@ void CCritHack::Draw()
 	int nBarEndX = nBoxX + nWidth - nPadding;  // Right edge of the bar
 	int nTextRightX = nBarEndX - 20;  // Offset for right-aligned text (text center point)
 	int nDrawY = nBoxY;
+	
+	// === ROW 0: SAFE MODE (centered, only when anticheat is on and skip crit detection is off) ===
+	if (CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_SkipCritDetection)
+	{
+		H::Draw->String(font, nBoxX + nWidth / 2, nDrawY, clrTextYellow, POS_CENTERX, "SAFE MODE");
+		nDrawY += nRowHeight;
+	}
 	
 	// === ROW 1: CRITS (left) and STATUS (right-aligned to bar end) ===
 	int iCrits = m_iAvailableCrits;
