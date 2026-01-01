@@ -404,6 +404,7 @@ namespace CFG
 	// Misc Enemy - HP-based coloring
 	CFGVAR(Visuals_Enemy_Outline_HP_Based, false); // Color enemy outlines based on HP
 	CFGVAR(Visuals_Enemy_Materials_HP_Based, false); // Color enemy materials based on HP
+	CFGVAR(Misc_Enemy_Custom_Name_Color, false); // Use custom color for all player names
 
 #pragma endregion
 
@@ -733,6 +734,7 @@ namespace CFG
 	CFGVAR(Color_Cheater, Color_t({ 248, 253, 8, 255 }));
 	CFGVAR(Color_RetardLegit, Color_t({ 253, 3, 11, 255 }));
 	CFGVAR(Color_F2P, Color_t({ 200, 200, 200, 255 })); // F2P player tag color
+	CFGVAR(Color_Custom_Name, Color_t({ 255, 255, 255, 255 })); // Custom name color for all players
 	CFGVAR(Color_FakeModel, Color_t({ 0, 204, 204, 255 })); // Cyan for fake model
 	CFGVAR(Color_LagRecord, Color_t({ 255, 255, 255, 255 })); // White for lag records
 	// Party colors (12 unique colors for different parties)

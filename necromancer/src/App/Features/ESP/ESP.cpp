@@ -394,17 +394,27 @@ void CESP::Run()
 
 				if (I::EngineClient->GetPlayerInfo(pPlayer->entindex(), &PlayerInfo))
 				{
-					// Check for player tags and use appropriate color
+					// Determine name color
 					Color_t nameColor = textColor;
-					PlayerPriority playerPriority = {};
-					if (F::Players->GetInfo(pPlayer->entindex(), playerPriority))
+					
+					// If custom name color is enabled, use it for all players
+					if (CFG::Misc_Enemy_Custom_Name_Color)
 					{
-						if (playerPriority.Cheater)
-							nameColor = CFG::Color_Cheater;
-						else if (playerPriority.RetardLegit)
-							nameColor = CFG::Color_RetardLegit;
-						else if (playerPriority.Ignored)
-							nameColor = CFG::Color_Friend;
+						nameColor = CFG::Color_Custom_Name;
+					}
+					else
+					{
+						// Check for player tags and use appropriate color
+						PlayerPriority playerPriority = {};
+						if (F::Players->GetInfo(pPlayer->entindex(), playerPriority))
+						{
+							if (playerPriority.Cheater)
+								nameColor = CFG::Color_Cheater;
+							else if (playerPriority.RetardLegit)
+								nameColor = CFG::Color_RetardLegit;
+							else if (playerPriority.Ignored)
+								nameColor = CFG::Color_Friend;
+						}
 					}
 
 					H::Draw->String(

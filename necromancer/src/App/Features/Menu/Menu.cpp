@@ -3451,6 +3451,11 @@ void CMenu::MainWindow()
 			{
 				CheckBox("Outline Color by HP", CFG::Visuals_Enemy_Outline_HP_Based);
 				CheckBox("Materials Color by HP", CFG::Visuals_Enemy_Materials_HP_Based);
+				CheckBox("Custom Name Color", CFG::Misc_Enemy_Custom_Name_Color);
+				if (CFG::Misc_Enemy_Custom_Name_Color)
+				{
+					ColorPicker("Name Color", CFG::Color_Custom_Name);
+				}
 			}
 			GroupBoxEnd();
 
