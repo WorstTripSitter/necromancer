@@ -668,12 +668,11 @@ namespace CFG
 
 	// Chat Spammer
 	CFGVAR(Misc_Chat_Spammer_Active, false);
-	CFGVAR(Misc_Chat_Spammer_Text, std::string(""));
 	CFGVAR(Misc_Chat_Spammer_Interval, 1.0f);
 	
 	// Killsay
 	CFGVAR(Misc_Chat_Killsay_Active, false);
-	CFGVAR(Misc_Chat_Killsay_Text, std::string(""));
+	CFGVAR(Misc_Chat_Killsay_Tagged_Only, false);
 
 	CFGVAR(Misc_Freeze_Queue, false);
 	CFGVAR(Misc_Auto_Queue, false);

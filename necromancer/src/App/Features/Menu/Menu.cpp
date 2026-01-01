@@ -7,6 +7,7 @@
 #include "../Players/Players.h"
 #include "../Materials/Materials.h"
 #include "../Outlines/Outlines.h"
+#include "../Chat/Chat.h"
 #include "../../CheaterDatabase/CheaterDatabase.h"
 
 #define multiselect(label, unique, ...) static std::vector<std::pair<const char *, bool &>> unique##multiselect = __VA_ARGS__; \
@@ -3923,15 +3924,24 @@ void CMenu::MainWindow()
 
 		m_mapGroupBoxes["Misc_Chat"].m_fnRenderContent = [this]() {
 			CheckBox("Chat Spammer", CFG::Misc_Chat_Spammer_Active);
-			if (CFG::Misc_Chat_Spammer_Active)
-			{
-				InputText("Spam Text", "Enter message:", CFG::Misc_Chat_Spammer_Text);
-				SliderFloat("Interval", CFG::Misc_Chat_Spammer_Interval, 0.1f, 10.0f, 0.1f, "%.1fs");
-			}
 			CheckBox("Killsay", CFG::Misc_Chat_Killsay_Active);
-			if (CFG::Misc_Chat_Killsay_Active)
+			
+			if (CFG::Misc_Chat_Spammer_Active || CFG::Misc_Chat_Killsay_Active)
 			{
-				InputText("Killsay Text", "Enter message:", CFG::Misc_Chat_Killsay_Text);
+				if (CFG::Misc_Chat_Spammer_Active)
+				{
+					SliderFloat("Interval", CFG::Misc_Chat_Spammer_Interval, 0.1f, 10.0f, 0.1f, "%.1fs");
+				}
+				
+				if (CFG::Misc_Chat_Killsay_Active)
+				{
+					CheckBox("Tagged Only", CFG::Misc_Chat_Killsay_Tagged_Only);
+				}
+				
+				if (Button("Text Files"))
+				{
+					OpenChatTextFiles();
+				}
 			}
 		};
 
