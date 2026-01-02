@@ -2376,7 +2376,7 @@ void CMenu::MainWindow()
 					if (CFG::Aimbot_Hitscan_Aim_Type == 3) // Switched TO triggerbot
 					{
 						flBackupFOV = CFG::Aimbot_Hitscan_FOV; // Backup current FOV
-						CFG::Aimbot_Hitscan_FOV = 10.0f; // Set FOV to 10
+						CFG::Aimbot_Hitscan_FOV = 30.0f; // Set FOV to 180
 					}
 					else if (nPrevAimType == 3) // Switched FROM triggerbot
 					{
