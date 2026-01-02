@@ -45,19 +45,20 @@ namespace CFG
 	CFGVAR(Aimbot_Hitscan_FakeLagFix, true); // Shoot on unchoke - when enemy sends update, their position is accurate
 
 	CFGVAR(Aimbot_Projectile_Active, true);
+	CFGVAR(Aimbot_Projectile_NoSpread, true);
+	CFGVAR(Aimbot_Projectile_Auto_Double_Donk, true);
+	CFGVAR(Aimbot_Projectile_Advanced_Head_Aim, true);
+	CFGVAR(Aimbot_Projectile_Ground_Strafe_Prediction, true);
+	CFGVAR(Aimbot_Projectile_Air_Strafe_Prediction, true);
+	CFGVAR(Aimbot_Projectile_BBOX_Multipoint, true);
+	CFGVAR(Aimbot_Projectile_Rocket_Splash, 1); //0 Disabled 1 Enabled 2 Preferred
 	CFGVAR(Aimbot_Projectile_Aim_Type, 1); //0 Normal 1 Silent
 	CFGVAR(Aimbot_Projectile_Sort, 0); //0 FOV 1 Distance
 	CFGVAR(Aimbot_Projectile_Aim_Position, 3); //0 Feet 1 Body 2 Head 3 Auto
-	CFGVAR(Aimbot_Projectile_FOV, 30.0f);
-	CFGVAR(Aimbot_Projectile_Max_Simulation_Time, 4.0f); // Max simulation time in seconds
-	CFGVAR(Aimbot_Projectile_Max_Targets, 2); // Max targets to simulate (1-5)
-	CFGVAR(Aimbot_Projectile_Auto_Charge, true); // Auto charge sticky/bow for aimbot (hidden, always on)
-	CFGVAR(Aimbot_Projectile_Charge_Ticks, 1); // Minimum ticks to charge before firing (hidden, default 1)
-	// Prediction_Method removed - always uses Movement Simulation now
-	CFGVAR(Aimbot_Projectile_Strafe_Prediction_Ground, true);
-	CFGVAR(Aimbot_Projectile_Strafe_Prediction_Air, true);
-	CFGVAR(Aimbot_Projectile_Aim_Prediction_Method, 1); // 0 = Simple forward, 1 = Calculate from velocity
-	CFGVAR(Aimbot_Projectile_Latency_Compensation, true); // Account for network latency in prediction
+	CFGVAR(Aimbot_Projectile_Aim_Prediction_Method, 0); //0 Full Acceleration 1 Current Velocity
+	CFGVAR(Aimbot_Projectile_FOV, 45.0f);
+	CFGVAR(Aimbot_Projectile_Max_Simulation_Time, 1.5f);
+	CFGVAR(Aimbot_Projectile_Max_Processing_Targets, 1);
 	
 	// Strafe prediction tuning (Amalgam-style)
 	CFGVAR(Aimbot_Projectile_Ground_Samples, 12);
@@ -427,6 +428,7 @@ namespace CFG
 	CFGVAR(Visuals_Crit_Indicator_TextSize, 100); // Percentage: 100-200
 	CFGVAR(Visuals_Crit_Indicator_Debug, false);
 	CFGVAR(Visuals_Draw_Movement_Path_Style, 1); //0 Off 1 Line 2 Separators 3 Spaced 4 Arrows 5 Boxes (Amalgam-style)
+	CFGVAR(Visuals_Draw_Predicted_Path_Style, 1); //0 Off 1 Line 2 Separators 3 Spaced 4 Arrows 5 Boxes (Amalgam-style)
 	
 	// Amalgam Simulation Visuals
 	CFGVAR(Visuals_Simulation_Movement_Style, 1); // 0=Off, 1=Line, 2=Dashed, 3=Arrows
