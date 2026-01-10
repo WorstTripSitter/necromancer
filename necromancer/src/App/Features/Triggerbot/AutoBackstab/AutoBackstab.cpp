@@ -13,6 +13,50 @@
 // because EyeAngles are NOT lag compensated (only position is). We add a safety margin
 // to account for potential angle changes during the latency window.
 
+// Check if player has an active Razorback equipped
+// The Razorback blocks one backstab, then becomes inactive (not drawn)
+bool HasActiveRazorback(C_TFPlayer* pPlayer)
+{
+	if (!pPlayer)
+		return false;
+	
+	// Check if player has the "set_blockbackstab_once" attribute (Razorback)
+	// The attribute value will be > 0 if they have a Razorback
+	int iBackstabShield = static_cast<int>(SDKUtils::AttribHookValue(0.f, "set_blockbackstab_once", pPlayer));
+	if (iBackstabShield <= 0)
+		return false;
+	
+	// The Razorback is only active if it's visible (ShouldDraw returns true)
+	// After blocking a backstab, it becomes invisible until recharged
+	// We need to find the actual wearable entity to check this
+	for (int i = 0; i < I::ClientEntityList->GetHighestEntityIndex(); i++)
+	{
+		auto pClientEntity = I::ClientEntityList->GetClientEntity(i);
+		if (!pClientEntity)
+			continue;
+		
+		// Check if it's a Razorback wearable
+		if (pClientEntity->GetClassId() != ETFClassIds::CTFWearableRazorback)
+			continue;
+		
+		// Cast to C_BaseEntity to access m_hOwnerEntity
+		auto pEntity = pClientEntity->As<C_BaseEntity>();
+		if (!pEntity)
+			continue;
+		
+		// Check if it belongs to this player
+		auto pOwner = pEntity->m_hOwnerEntity().Get();
+		if (!pOwner || pOwner != pPlayer)
+			continue;
+		
+		// Check if the Razorback is visible (active)
+		if (pEntity->ShouldDraw())
+			return true;
+	}
+	
+	return false;
+}
+
 bool IsBehindAndFacingTarget(const Vec3& ownerCenter, const Vec3& ownerViewangles, const Vec3& targetCenter, const Vec3& targetEyeAngles, float flSafetyMargin = 0.0f)
 {
 	Vec3 toTarget = targetCenter - ownerCenter;
@@ -127,6 +171,12 @@ void CAutoBackstab::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 		}
 
 		if (CFG::Triggerbot_AutoBackstab_Ignore_Invulnerable && pPlayer->IsInvulnerable())
+		{
+			continue;
+		}
+
+		// Skip snipers with active Razorback (blocks backstab)
+		if (CFG::Triggerbot_AutoBackstab_Ignore_Razorback && HasActiveRazorback(pPlayer))
 		{
 			continue;
 		}

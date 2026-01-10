@@ -163,6 +163,7 @@ namespace CFG
 	CFGVAR(Triggerbot_AutoBackstab_Ignore_Friends, false);
 	CFGVAR(Triggerbot_AutoBackstab_Ignore_Invisible, false);
 	CFGVAR(Triggerbot_AutoBackstab_Ignore_Invulnerable, true);
+	CFGVAR(Triggerbot_AutoBackstab_Ignore_Razorback, true);
 
 	CFGVAR(Triggerbot_AutoDetonate_Active, true);
 	CFGVAR(Triggerbot_AutoDetonate_Always_On, true);

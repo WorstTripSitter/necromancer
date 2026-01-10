@@ -2774,7 +2774,8 @@ void CMenu::MainWindow()
 				{
 					{ "Friends", CFG::Triggerbot_AutoBackstab_Ignore_Friends },
 					{ "Invisible", CFG::Triggerbot_AutoBackstab_Ignore_Invisible },
-					{ "Invulnerable", CFG::Triggerbot_AutoBackstab_Ignore_Invulnerable }
+					{ "Invulnerable", CFG::Triggerbot_AutoBackstab_Ignore_Invulnerable },
+					{ "Razorback", CFG::Triggerbot_AutoBackstab_Ignore_Razorback }
 				});
 			}
 			GroupBoxEnd();

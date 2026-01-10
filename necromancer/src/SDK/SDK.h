@@ -321,7 +321,7 @@ namespace G
 	inline bool bCanHeadshot = false;
 	inline bool bReloading = false;  // Amalgam: true when reloading but have ammo and can't attack yet
 	inline int Attacking = 0;  // Amalgam: 0 = not attacking, 1 = attacking this tick
-	inline bool Throwing = false;  // Amalgam: true when throwing a projectile (e.g. sandman ball)
+	inline int Throwing = 0;  // Amalgam: 0 = not throwing, 1 = throwing, 2 = throw in progress
 	inline int nOldButtons = 0;
 	inline Vec3 vUserCmdAngles = {};
 	inline CUserCmd* CurrentUserCmd = nullptr;
