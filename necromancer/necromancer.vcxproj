@@ -367,6 +367,7 @@
     <ClCompile Include="src\App\Features\Aimbot\AimbotHitscan\AimbotHitscan.cpp" />
     <ClCompile Include="src\App\Features\Aimbot\AimbotMelee\AimbotMelee.cpp" />
     <ClCompile Include="src\App\Features\Aimbot\AimbotProjectile\AimbotProjectile.cpp" />
+    <ClCompile Include="src\App\Features\Aimbot\AimbotWrangler\AimbotWrangler.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\AimbotGlobal\AimbotGlobal.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\AimbotProjectile\AimbotProjectileAmalgam.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\EnginePrediction\AmalgamEnginePred.cpp" />
@@ -522,6 +523,7 @@
     <ClInclude Include="src\App\Features\Aimbot\AimbotMelee\AimbotMelee.h" />
     <ClInclude Include="src\App\Features\Aimbot\AimbotProjectile\AimbotProjectile.h" />
     <ClInclude Include="src\App\Features\Aimbot\AimbotRocket\AimbotRocket.h" />
+    <ClInclude Include="src\App\Features\Aimbot\AimbotWrangler\AimbotWrangler.h" />
     <ClInclude Include="src\App\Features\amalgam_port\AimbotGlobal\AimbotGlobal.h" />
     <ClInclude Include="src\App\Features\amalgam_port\AimbotProjectile\AimbotProjectile.h" />
     <ClInclude Include="src\App\Features\amalgam_port\AimbotProjectile\AimbotProjectileAmalgam.h" />

@@ -2624,7 +2624,6 @@ void CMenu::MainWindow()
 					{
 						{ "Disabled", 0 },
 						{ "Enabled", 1 },
-						{ "Preferred", 2 }
 					});
 
 				SelectSingle("Aim Type", CFG::Aimbot_Projectile_Aim_Type, {

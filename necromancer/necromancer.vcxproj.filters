@@ -151,11 +151,12 @@
     <ClCompile Include="src\DllMain.cpp" />
     <ClCompile Include="src\App\Features\Aimbot\AimbotProjectile\AimbotProjectile.cpp" />
     <ClCompile Include="src\App\Features\ProjectileSim\ProjectileSim.cpp" />
-    <ClCompile Include="src\App\Features\Aimbot\AimbotRocket\AimbotRocket.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\AimbotGlobal\AimbotGlobal.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\EnginePrediction\AmalgamEnginePred.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\ProjectileSimulation\ProjectileSimulation.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\Ticks\Ticks.cpp" />
+    <ClCompile Include="src\App\Features\amalgam_port\AimbotProjectile\AimbotProjectileAmalgam.cpp" />
+    <ClCompile Include="src\App\Features\Aimbot\AimbotWrangler\AimbotWrangler.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\nlohmann\json_fwd.hpp" />
@@ -375,5 +376,7 @@
     <ClInclude Include="src\App\Features\amalgam_port\ProjectileSimulation\ProjectileSimulation.h" />
     <ClInclude Include="src\App\Features\amalgam_port\Ticks\Ticks.h" />
     <ClInclude Include="src\App\Features\amalgam_port\AmalgamCompat.h" />
+    <ClInclude Include="src\App\Features\amalgam_port\AimbotProjectile\AimbotProjectileAmalgam.h" />
+    <ClInclude Include="src\App\Features\Aimbot\AimbotWrangler\AimbotWrangler.h" />
   </ItemGroup>
 </Project>

@@ -3,6 +3,7 @@
 #include "AimbotHitscan/AimbotHitscan.h"
 #include "AimbotMelee/AimbotMelee.h"
 #include "AimbotProjectile/AimbotProjectile.h"
+#include "AimbotWrangler/AimbotWrangler.h"
 #include "../amalgam_port/AimbotProjectile/AimbotProjectileAmalgam.h"
 #include "../RapidFire/RapidFire.h"
 
@@ -45,6 +46,13 @@ void CAimbot::RunMain(CUserCmd* pCmd)
 		|| pLocal->m_bFeignDeathReady() || pLocal->m_flInvisibility() > 0.0f
 		|| pWeapon->m_iItemDefinitionIndex() == Soldier_m_RocketJumper || pWeapon->m_iItemDefinitionIndex() == Demoman_s_StickyJumper)
 		return;
+
+	// Check for Wrangler first (it returns EWeaponType::OTHER)
+	if (F::AimbotWrangler->IsWrangler(pWeapon))
+	{
+		F::AimbotWrangler->Run(pCmd, pLocal, pWeapon);
+		return;
+	}
 
 	switch (H::AimUtils->GetWeaponType(pWeapon))
 	{
