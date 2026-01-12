@@ -3851,10 +3851,12 @@ void CMenu::MainWindow()
 			
 			SliderInt("Double Tap Delay Ticks", CFG::Exploits_RapidFire_Min_Ticks_Target_Same, 0, 5, 1);
 			CheckBox("Double Tap Antiwarp", CFG::Exploits_RapidFire_Antiwarp);
-			SliderInt("Cmds/Packet", CFG::Exploits_RapidFire_Max_Commands, 2, 15, 1);
+			SliderInt("Cmds/Packet (Normal)", CFG::Exploits_RapidFire_Max_Commands, 2, 15, 1);
+			SliderInt("Cmds/Packet (DT)", CFG::Exploits_RapidFire_DT_Commands, 15, 24, 1);
 			SelectSingle("Tick Tracking", CFG::Exploits_RapidFire_Tick_Tracking, {
 				{ "Disabled", 0 }, { "Linear", 1 }
 			});
+			CheckBox("Deficit Tracking", CFG::Exploits_RapidFire_Deficit_Tracking);
 			InputKey("Warp Key", CFG::Exploits_Warp_Key);
 			SelectSingle("Warp Mode", CFG::Exploits_Warp_Mode, {
 				{ "Slow", 0 }, { "Full", 1 }
@@ -5798,7 +5800,7 @@ void CMenu::HandleGroupBoxDrag()
 			// Find the tab name
 			std::string szTab = m_strDraggingGroupBox.substr(0, m_strDraggingGroupBox.find('_'));
 			
-			// Validation for Exploits tab using size categories
+			// Validation for Exploits tab using size categories (YES THIS IS ALL MANUAL, the things i do for the 2 users who use necromancer)
 			// Rules:
 			// - 1 very_big + up to 1 extrasmall allowed in 1 lane (very_big takes most of the column)
 			// - 1 big + 1 medium + 1 extrasmall allowed in 1 lane
@@ -5837,16 +5839,62 @@ void CMenu::HandleGroupBoxDrag()
 				int nNewSmall = nSmallInTarget + (gb.m_eSize == EGroupBoxSize::SMALL ? 1 : 0);
 				int nNewExtraSmall = nExtraSmallInTarget + (gb.m_eSize == EGroupBoxSize::EXTRA_SMALL ? 1 : 0);
 				
+				// Check by name for specific blocked combos
+				bool bHasShifting = false;
+				bool bHasFakeLag = false;
+				bool bHasRegionSelector = false;
+				
+				for (auto& pair : m_mapGroupBoxes)
+				{
+					if (pair.second.m_szId.find("Exploits_") == 0 && pair.second.m_nColumn == targetColumn)
+					{
+						if (pair.first == "Exploits_Shifting" || (pair.first == m_strDraggingGroupBox && m_strDraggingGroupBox == "Exploits_Shifting"))
+							bHasShifting = true;
+						if (pair.first == "Exploits_FakeLag" || (pair.first == m_strDraggingGroupBox && m_strDraggingGroupBox == "Exploits_FakeLag"))
+							bHasFakeLag = true;
+						if (pair.first == "Exploits_Region Selector" || (pair.first == m_strDraggingGroupBox && m_strDraggingGroupBox == "Exploits_Region Selector"))
+							bHasRegionSelector = true;
+					}
+				}
+				// Also check the dragged box
+				if (m_strDraggingGroupBox == "Exploits_Shifting") bHasShifting = true;
+				if (m_strDraggingGroupBox == "Exploits_FakeLag") bHasFakeLag = true;
+				if (m_strDraggingGroupBox == "Exploits_Region Selector") bHasRegionSelector = true;
+				
 				// Check valid combinations:
 				bool bValidPlacement = false;
 				
-				// Rule 0a: 1 very_big + 1 medium + 1 small + 1 extrasmall (no big) - Shifting+Crithack+FakeLag+NoSpread
-				if (nNewVeryBig == 1 && nNewBig == 0 && nNewMedium <= 1 && nNewSmall <= 1 && nNewExtraSmall <= 1)
-					bValidPlacement = true;
-				
-				// Rule 0b: 1 very_big + 2 medium + (1 small OR 1 extrasmall, not both) (no big) - Shifting+RegionSelector+Crithack+FakeLag/NoSpread
-				if (nNewVeryBig == 1 && nNewBig == 0 && nNewMedium == 2 && (nNewSmall + nNewExtraSmall) <= 1)
-					bValidPlacement = true;
+				// Rule 0: Shifting (very_big) combinations:
+				// ALLOWED:
+				// - Shifting + NoSpread + FakeLag (extrasmall + small)
+				// - Shifting + NoSpread + Crithack (extrasmall + medium)
+				// - Shifting + NoSpread + RegionSelector (extrasmall + medium)
+				// - Shifting + Crithack + FakeLag (medium + small)
+				// - Shifting + 1 other box (any)
+				// NOT ALLOWED:
+				// - Shifting + FakeLag + RegionSelector
+				if (nNewVeryBig == 1 && nNewBig == 0)
+				{
+					// Block Shifting + FakeLag + RegionSelector specifically
+					if (bHasShifting && bHasFakeLag && bHasRegionSelector)
+					{
+						bValidPlacement = false;
+					}
+					else
+					{
+						int nOtherBoxes = nNewMedium + nNewSmall + nNewExtraSmall;
+						if (nOtherBoxes <= 1)
+						{
+							// 1 other box is always fine
+							bValidPlacement = true;
+						}
+						else if (nOtherBoxes == 2)
+						{
+							// 2 other boxes allowed (except Shifting+FakeLag+RegionSelector which is blocked above)
+							bValidPlacement = true;
+						}
+					}
+				}
 				
 				// Rule 1: 1 big + 1 medium + 1 extrasmall (no small, no very_big)
 				if (nNewVeryBig == 0 && nNewBig == 1 && nNewMedium <= 1 && nNewSmall == 0 && nNewExtraSmall <= 1)

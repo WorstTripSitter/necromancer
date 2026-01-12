@@ -51,6 +51,19 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	const int nUserLimit = std::clamp(CFG::Exploits_Shifting_Recharge_Limit, 2, 24);
 	nMaxTicks = std::min(nMaxTicks, nUserLimit);
 
+	// ============================================
+	// Deficit Compensation (from Amalgam)
+	// ============================================
+	// If the server rejected commands (deficit > 0), reduce available ticks
+	// This prevents getting stuck in a bad state after failed shifts
+	if (CFG::Exploits_RapidFire_Deficit_Tracking && Shifting::nDeficit > 0)
+	{
+		// Reduce both deficit and available ticks
+		Shifting::nDeficit--;
+		if (Shifting::nAvailableTicks > 0)
+			Shifting::nAvailableTicks--;
+	}
+
 	// Handle recharging BEFORE the callOriginal lambda (like reference)
 	if (Shifting::nAvailableTicks < nMaxTicks)
 	{
@@ -86,17 +99,30 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	{
 		Shifting::bRapidFireWantShift = false;
 		Shifting::bShifting = true;
+		Shifting::bShiftingRapidFire = true;
 
 		// Use configured ticks, capped by available
 		const int nTicks = std::min(CFG::Exploits_RapidFire_Ticks, Shifting::nAvailableTicks);
+		
+		// Set shift tracking for prediction fix
+		Shifting::nTotalShiftTicks = nTicks;
+		Shifting::nCurrentShiftTick = 0;
 
 		for (int n = 0; n < nTicks && Shifting::nAvailableTicks > 0; n++)
 		{
+			Shifting::nCurrentShiftTick = n;
 			callOriginal(n == nTicks - 1);
 			Shifting::nAvailableTicks--;
 		}
 
 		Shifting::bShifting = false;
+		Shifting::bShiftingRapidFire = false;
+		Shifting::nCurrentShiftTick = 0;
+		Shifting::nTotalShiftTicks = 0;
+		
+		// Clear deficit after successful shift (like Amalgam does for warp)
+		Shifting::nDeficit = 0;
+		
 		return;
 	}
 

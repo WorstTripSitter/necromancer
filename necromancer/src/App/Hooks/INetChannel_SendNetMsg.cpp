@@ -220,13 +220,13 @@ MAKE_HOOK(INetChannel_SendNetMsg, Signatures::INetChannel_SendNetMsg.Get(), bool
 		unsigned char data[4000] = {};
 		pMsg->m_DataOut.StartWriting(data, sizeof(data));
 
-		// Dynamic command priority: use max (15) during doubletap shifts to push attack commands faster
-		// Use configured lower value when idle to reduce bandwidth/improve stability
+		// Dynamic command priority: use DT setting during doubletap shifts to push attack commands faster
+		// Use normal setting when idle to reduce bandwidth/improve stability
 		int nMaxNewCommands;
 		if (Shifting::bShifting && !Shifting::bShiftingWarp)
 		{
-			// During doubletap: prioritize getting all attack commands out - use max allowed
-			nMaxNewCommands = MAX_NEW_COMMANDS;
+			// During doubletap: use DT commands setting (user configurable, default 24)
+			nMaxNewCommands = std::min(CFG::Exploits_RapidFire_DT_Commands, static_cast<int>(MAX_NEW_COMMANDS));
 		}
 		else
 		{
@@ -261,6 +261,31 @@ MAKE_HOOK(INetChannel_SendNetMsg, Signatures::INetChannel_SendNetMsg.Get(), bool
 			}
 
 			CALL_ORIGINAL(pNet, reinterpret_cast<INetMessage&>(*pMsg), bForceReliable, bVoice);
+		}
+
+		// ============================================
+		// Deficit Tracking (from Amalgam)
+		// ============================================
+		// Track when we send more commands than the server can process.
+		// The server has sv_maxusrcmdprocessticks (default 24) limit.
+		// If we exceed it, commands get dropped and we need to compensate.
+		if (CFG::Exploits_RapidFire_Deficit_Tracking && !Shifting::bShiftingWarp) // Don't track during warp
+		{
+			// Get sv_maxusrcmdprocessticks
+			static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
+			Shifting::nMaxUsrCmdProcessTicks = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
+			
+			// Calculate how many commands we're allowed to send
+			const int nAllowedNewCommands = std::max(Shifting::nMaxUsrCmdProcessTicks - Shifting::nAvailableTicks, 0);
+			
+			// Calculate how many we actually sent (minus the 3 backup commands that don't count)
+			const int nCmdCount = pMsg->m_nNewCommands + pMsg->m_nBackupCommands - 3;
+			
+			// If we sent more than allowed, track the deficit
+			if (nCmdCount > nAllowedNewCommands)
+			{
+				Shifting::nDeficit = nCmdCount - nAllowedNewCommands;
+			}
 		}
 
 		return true;

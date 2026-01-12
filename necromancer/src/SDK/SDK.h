@@ -486,6 +486,12 @@ namespace Shifting
 	inline float flLastLatency = 0.0f;        // Last measured latency
 	inline int nPredictedServerTick = 0;      // Our prediction of current server tick
 
+	// Deficit tracking (from Amalgam)
+	// When we send more commands than the server can process, it rejects some.
+	// This tracks the deficit so we can compensate by reducing available ticks.
+	inline int nDeficit = 0;                  // Commands rejected by server
+	inline int nMaxUsrCmdProcessTicks = 24;   // sv_maxusrcmdprocessticks value
+
 	// Update tick tracking - call this every frame
 	inline void UpdateTickTracking(int nServerTick, int nCommandAck, float flLatency)
 	{
@@ -549,6 +555,9 @@ namespace Shifting
 		nTicksAhead = 0;
 		flLastLatency = 0.0f;
 		nPredictedServerTick = 0;
+		// Reset deficit tracking
+		nDeficit = 0;
+		nMaxUsrCmdProcessTicks = 24;
 	}
 }
 

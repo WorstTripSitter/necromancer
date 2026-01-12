@@ -442,6 +442,7 @@
     <ClCompile Include="src\App\Hooks\CParticleProperty_Create.cpp" />
     <ClCompile Include="src\App\Hooks\CParticleSystemMgr_DrawRenderCache.cpp" />
     <ClCompile Include="src\App\Hooks\CPrediction_RunCommand.cpp" />
+    <ClCompile Include="src\App\Hooks\CPrediction_RunSimulation.cpp" />
     <ClCompile Include="src\App\Hooks\CRendering3dView_EnableWorldFog.cpp" />
     <ClCompile Include="src\App\Hooks\CSequenceTransitioner_CheckForSequenceChange.cpp" />
     <ClCompile Include="src\App\Hooks\CSkyboxView_Enable3dSkyboxFog.cpp" />
@@ -455,6 +456,7 @@
     <ClCompile Include="src\App\Hooks\CTFPlayerPanel_GetTeam.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPlayerShared_InCond.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPlayerShared_IsPlayerDominated.cpp" />
+    <ClCompile Include="src\App\Hooks\CTFPlayerShared_ShouldSuppressPrediction.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPlayer_AvoidPlayers.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPlayer_BRenderAsZombie.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPlayer_FireBullet.cpp" />

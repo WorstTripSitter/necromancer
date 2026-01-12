@@ -1392,25 +1392,70 @@ void CAimbotProjectile::HandleFire(CUserCmd* pCmd, C_TFWeaponBase* pWeapon, C_TF
 	{
 		if (CFG::Aimbot_Projectile_Auto_Double_Donk)
 		{
+			// Amalgam-style improved auto double donk
+			// Uses GRENADE_CHECK_INTERVAL (0.195f) for proper grenade physics timing
+			constexpr float GRENADE_CHECK_INTERVAL = 0.195f;
+			
 			const float flDetonateTime = pWeapon->As<C_TFGrenadeLauncher>()->m_flDetonateTime();
-			const float flDetonateMaxTime = SDKUtils::AttribHookValue(0.0f, "grenade_launcher_mortar_mode", pWeapon);
-			float flCharge = Math::RemapValClamped(flDetonateTime - I::GlobalVars->curtime, 0.0f, flDetonateMaxTime, 0.0f, 1.0f);
-
-			if (I::GlobalVars->curtime > flDetonateTime)
-				flCharge = 1.0f;
-
-			if (flCharge < target.TimeToTarget * 0.8f)
-				pCmd->buttons &= ~IN_ATTACK;
-
-			else pCmd->buttons |= IN_ATTACK;
+			const float flTimeToTarget = target.TimeToTarget;
+			
+			// Calculate network desync compensation (similar to Amalgam's GetDesync)
+			const float flServerTime = TICKS_TO_TIME(I::ClientState->m_ClockDriftMgr.m_nServerTick);
+			const float flDesync = I::GlobalVars->curtime - flServerTime - SDKUtils::GetLatency();
+			
+			if (flDetonateTime > 0.0f)
+			{
+				// Cannonball is already charging - calculate remaining fuse time
+				float flFuseRemaining = flDetonateTime - I::GlobalVars->curtime;
+				
+				// Quantize to grenade check intervals like Amalgam does for accuracy
+				flFuseRemaining = floorf(flFuseRemaining / GRENADE_CHECK_INTERVAL) * GRENADE_CHECK_INTERVAL + flDesync;
+				
+				// Time needed for projectile to reach target (subtract one interval for timing)
+				const float flTimeNeeded = flTimeToTarget - GRENADE_CHECK_INTERVAL;
+				
+				// If fuse will expire before reaching target, keep charging
+				// If fuse time is sufficient, release to fire
+				if (flFuseRemaining >= flTimeNeeded && flFuseRemaining > GRENADE_CHECK_INTERVAL)
+				{
+					// Check if we'll still hit in the next tick (look-ahead)
+					// If fuse is about to run out or we're at the right timing, fire now
+					const float flNextFuse = flFuseRemaining - GRENADE_CHECK_INTERVAL;
+					if (flNextFuse < flTimeNeeded || flFuseRemaining <= flTimeToTarget)
+					{
+						// Fire now - we won't have a better opportunity
+						pCmd->buttons &= ~IN_ATTACK;
+					}
+					else
+					{
+						// Keep charging - we can wait for better timing
+						pCmd->buttons |= IN_ATTACK;
+					}
+				}
+				else if (flFuseRemaining < flTimeNeeded)
+				{
+					// Fuse too short - keep charging (will reset on next shot)
+					pCmd->buttons |= IN_ATTACK;
+				}
+				else
+				{
+					// Fire now
+					pCmd->buttons &= ~IN_ATTACK;
+				}
+			}
+			else
+			{
+				// Not charging yet - start charging
+				pCmd->buttons |= IN_ATTACK;
+			}
 		}
-
 		else
 		{
+			// Simple mode - just release when charged
 			if (pWeapon->As<C_TFGrenadeLauncher>()->m_flDetonateTime() > 0.0f)
 				pCmd->buttons &= ~IN_ATTACK;
-
-			else pCmd->buttons |= IN_ATTACK;
+			else
+				pCmd->buttons |= IN_ATTACK;
 		}
 	}
 
