@@ -17,14 +17,16 @@ class CAutoAirblast
 {
 private:
 	// Aimbot support - finds best target to reflect rocket at (straight line projectiles)
+	// vProjectilePos: Current position of the incoming projectile (where reflected path starts)
 	// Returns aim angles and paths for visualization
-	bool FindAimbotTarget(C_TFPlayer* pLocal, C_BaseProjectile* pProjectile, Vec3& outAngles,
-		std::vector<Vec3>& outPlayerPath, std::vector<Vec3>& outRocketPath);
+	// outRocketPath will be empty if the reflected projectile would hit a wall before target
+	bool FindAimbotTarget(C_TFPlayer* pLocal, C_BaseProjectile* pProjectile, const Vec3& vProjectilePos,
+		Vec3& outAngles, std::vector<Vec3>& outPlayerPath, std::vector<Vec3>& outRocketPath);
 
 	// Aimbot support for arc projectiles (gravity affected)
-	// Uses simplified prediction - aims directly at predicted player position
-	bool FindAimbotTargetArc(C_TFPlayer* pLocal, C_BaseProjectile* pProjectile, Vec3& outAngles,
-		std::vector<Vec3>& outPlayerPath, std::vector<Vec3>& outProjectilePath);
+	// Uses arc calculation to aim at predicted player position
+	bool FindAimbotTargetArc(C_TFPlayer* pLocal, C_BaseProjectile* pProjectile, const Vec3& vProjectilePos,
+		Vec3& outAngles, std::vector<Vec3>& outPlayerPath, std::vector<Vec3>& outProjectilePath);
 
 	// Get projectile type for aimbot support
 	EReflectProjectileType GetProjectileType(C_BaseProjectile* pProjectile);

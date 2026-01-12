@@ -138,12 +138,12 @@ MAKE_HOOK(CPrediction_RunSimulation, Signatures::CPrediction_RunSimulation.Get()
         localPlayer->m_nTickBase() -= iTickbaseAdjustment;
     }
     
-    // Adjust players for prediction (like your existing RunCommand hook)
-    F::EnginePrediction->AdjustPlayers(localPlayer);
+    // NOTE: We don't call AdjustPlayers/RestorePlayers here because:
+    // 1. It's already called in CPrediction_RunCommand hook
+    // 2. It's already called in EnginePrediction::Simulate
+    // Calling it here too causes double-adjustment which breaks ESP scaling
     
     CALL_ORIGINAL(rcx, current_command, curtime, cmd, localPlayer);
-    
-    F::EnginePrediction->RestorePlayers();
     
     // Restore tickbase (the original function may have modified it)
     // Note: We don't restore here because the game's prediction system

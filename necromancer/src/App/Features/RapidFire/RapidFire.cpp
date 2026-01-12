@@ -103,8 +103,33 @@ bool CRapidFire::ShouldStart(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon)
 		return true;
 	}
 
-	// For hitscan weapons: original logic - need target, firing, and 24 ticks since can fire
-	if (G::nTicksSinceCanFire < 24 || G::nTargetIndex <= 1 || !G::bFiring)
+	// For hitscan weapons: need target and firing intent
+	if (G::nTargetIndex <= 1 || !G::bFiring)
+		return false;
+
+	// Minigun special case: when fully revved up (FIRING or SPINNING state), allow DT immediately
+	// No 24 tick delay needed - the minigun is already ready to fire
+	if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+	{
+		const int nState = pWeapon->As<C_TFMinigun>()->m_iWeaponState();
+		if (nState == AC_STATE_FIRING || nState == AC_STATE_SPINNING)
+		{
+			// Fully revved - can DT immediately, just need ammo
+			if (!pWeapon->HasPrimaryAmmoForShot())
+				return false;
+			
+			// Still respect target same ticks for accuracy
+			if (G::nTicksTargetSame < CFG::Exploits_RapidFire_Min_Ticks_Target_Same)
+				return false;
+			
+			return true;
+		}
+		// Not fully revved - don't allow DT
+		return false;
+	}
+
+	// For other hitscan weapons: need 24 ticks since can fire
+	if (G::nTicksSinceCanFire < 24)
 		return false;
 
 	if (G::nTicksTargetSame < CFG::Exploits_RapidFire_Min_Ticks_Target_Same)
@@ -134,7 +159,32 @@ void CRapidFire::Run(CUserCmd* pCmd, bool* pSendPacket)
 	if (bDTKeyHeld && bHasEnoughTicks && bWeaponSupported && !Shifting::bShifting && !Shifting::bRecharging)
 	{
 		// DT key held and we have ticks - check if we should block normal fire
-		if (!IsProjectileWeapon(pWeapon) && G::nTicksTargetSame < CFG::Exploits_RapidFire_Min_Ticks_Target_Same)
+		// Skip this check for minigun when fully revved (it can DT immediately)
+		bool bShouldBlockFire = false;
+		
+		if (!IsProjectileWeapon(pWeapon))
+		{
+			if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+			{
+				// Minigun: only block if not fully revved
+				const int nState = pWeapon->As<C_TFMinigun>()->m_iWeaponState();
+				if (nState != AC_STATE_FIRING && nState != AC_STATE_SPINNING)
+				{
+					bShouldBlockFire = true; // Not revved, block fire
+				}
+				// When fully revved, don't block - let DT happen immediately
+			}
+			else
+			{
+				// Other hitscan: block if target same ticks not met
+				if (G::nTicksTargetSame < CFG::Exploits_RapidFire_Min_Ticks_Target_Same)
+				{
+					bShouldBlockFire = true;
+				}
+			}
+		}
+		
+		if (bShouldBlockFire)
 		{
 			// Delay not met - block firing completely, wait for DT
 			pCmd->buttons &= ~IN_ATTACK;

@@ -612,7 +612,18 @@ void CAimbotHitscan::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles
 			// Check if we're actually going to fire THIS tick
 			// G::Attacking is set BEFORE aimbot runs, so we need to check directly
 			// We fire when: can attack AND pressing attack (or aimbot added IN_ATTACK)
-			const bool bWillFire = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
+			// Also handle reload interrupt: single-reload weapons can fire during reload if they have ammo
+			bool bWillFire = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
+			
+			// Reload interrupt case: attacking during reload with single-reload weapon that has ammo
+			if (!bWillFire && (pCmd->buttons & IN_ATTACK))
+			{
+				const auto pWeapon = H::Entities->GetWeapon();
+				if (pWeapon && pWeapon->IsInReload() && pWeapon->m_bReloadsSingly() && pWeapon->m_iClip1() > 0)
+				{
+					bWillFire = true;
+				}
+			}
 			
 			if (bWillFire)
 			{

@@ -6,7 +6,7 @@ namespace CFG
 {
 #pragma region Aimbot
 
-	CFGVAR(Aimbot_Active, true);
+	CFGVAR(Aimbot_Active, false);
 	CFGVAR(Aimbot_AutoShoot, true);
 	CFGVAR(Aimbot_Key, 0);
 	CFGVAR(Aimbot_Target_Players, true);
@@ -17,7 +17,7 @@ namespace CFG
 	CFGVAR(Aimbot_Ignore_Taunting, false);
 	CFGVAR(Aimbot_Ignore_Stickies, false);
 
-	CFGVAR(Aimbot_Hitscan_Active, false);
+	CFGVAR(Aimbot_Hitscan_Active, true);
 	CFGVAR(Aimbot_Hitscan_Target_LagRecords, true);
 	CFGVAR(Aimbot_Hitscan_Target_Stickies, true);
 	CFGVAR(Aimbot_Hitscan_Aim_Type, 1); //0 Normal 1 Silent 2 Smooth 3 Triggerbot
@@ -43,7 +43,7 @@ namespace CFG
 	CFGVAR(Aimbot_Hitscan_Wait_For_Charge, false);
 	CFGVAR(Aimbot_Hitscan_Minigun_TapFire, false);
 	CFGVAR(Aimbot_Hitscan_Smart_Shotgun, false); // Smart shotgun damage prediction - waits for pellet visibility
-	CFGVAR(Aimbot_Hitscan_FakeLagFix, true); // Shoot on unchoke - when enemy sends update, their position is accurate
+	CFGVAR(Aimbot_Hitscan_FakeLagFix, false); // Shoot on unchoke - when enemy sends update, their position is accurate
 
 	CFGVAR(Aimbot_Projectile_Active, true);
 	CFGVAR(Aimbot_Projectile_NoSpread, true);
@@ -65,7 +65,7 @@ namespace CFG
 	CFGVAR(Aimbot_Projectile_Aim_Position, 3); //0 Feet 1 Body 2 Head 3 Auto
 	CFGVAR(Aimbot_Projectile_Aim_Prediction_Method, 0); //0 Full Acceleration 1 Current Velocity
 	CFGVAR(Aimbot_Projectile_FOV, 45.0f);
-	CFGVAR(Aimbot_Projectile_Max_Simulation_Time, 1.5f);
+	CFGVAR(Aimbot_Projectile_Max_Simulation_Time, 2.5f); // Increased from 1.5 for better prediction
 	CFGVAR(Aimbot_Projectile_Max_Processing_Targets, 1);
 	
 	// Strafe prediction tuning (Amalgam-style)
@@ -133,13 +133,13 @@ namespace CFG
 	// Behavior-based prediction - uses learned player behavior to improve aim
 	CFGVAR(Aimbot_Projectile_Use_Dodge_Prediction, true); // Apply aim offset based on predicted dodge direction
 
-	CFGVAR(Aimbot_Melee_Active, false);
+	CFGVAR(Aimbot_Melee_Active, true);
 	CFGVAR(Aimbot_Melee_Always_Active, false);
 	CFGVAR(Aimbot_Melee_Target_LagRecords, true);
 	CFGVAR(Aimbot_Melee_Aim_Type, 1); //0 Normal 1 Silent 2 Smooth
 	CFGVAR(Aimbot_Melee_Sort, 0); //0 FOV 1 Distance
 	CFGVAR(Aimbot_Melee_FOV, 180.0f);
-	CFGVAR(Aimbot_Melee_Smoothing, 20.0f);
+	CFGVAR(Aimbot_Melee_Smoothing, 5.0f);
 	CFGVAR(Aimbot_Melee_Predict_Swing, true);
 	CFGVAR(Aimbot_Melee_Walk_To_Target, false);
 	CFGVAR(Aimbot_Melee_Whip_Teammates, true);
@@ -153,7 +153,7 @@ namespace CFG
 
 #pragma region Triggerbot
 
-	CFGVAR(Triggerbot_Active, true);
+	CFGVAR(Triggerbot_Active, false);
 	CFGVAR(Triggerbot_Key, 0);
 
 	CFGVAR(Triggerbot_AutoBackstab_Active, true);
@@ -178,7 +178,6 @@ namespace CFG
 	CFGVAR(Triggerbot_AutoDetonate_Ignore_Invulnerable, true);
 
 	CFGVAR(Triggerbot_AutoAirblast_Active, true);
-	CFGVAR(Triggerbot_AutoAirblast_Aim_Assist, true);
 	CFGVAR(Triggerbot_AutoAirblast_Mode, 1); //0 Legit 1 Rage
 	CFGVAR(Triggerbot_AutoAirblast_Aim_Mode, 1); //0 Normal 1 Silent
 	CFGVAR(Triggerbot_AutoAirblast_Aimbot_Support, true); // Use projectile aimbot to aim reflected rockets at enemies
@@ -249,7 +248,7 @@ namespace CFG
 	CFGVAR(ESP_Players_Class, false);
 	CFGVAR(ESP_Players_Class_Icon, false);
 	CFGVAR(ESP_Players_Health, false);
-	CFGVAR(ESP_Players_HealthBar, true);
+	CFGVAR(ESP_Players_HealthBar, false);
 	CFGVAR(ESP_Players_Uber, false);
 	CFGVAR(ESP_Players_UberBar, true);
 	CFGVAR(ESP_Players_Box, false);
@@ -329,7 +328,7 @@ namespace CFG
 
 #pragma region Materials
 
-	CFGVAR(Materials_Active, true);
+	CFGVAR(Materials_Active, false);
 
 	CFGVAR(Materials_Players_Active, false);
 	CFGVAR(Materials_Players_No_Depth, false);
@@ -350,9 +349,9 @@ namespace CFG
 	CFGVAR(Materials_FakeModel_Material, 1); //0 Original 1 Flat 2 Shaded 3 Glossy 4 Glow 5 Plastic
 
 	// Lag Records Material
-	CFGVAR(Materials_LagRecords_Active, false);
+	CFGVAR(Materials_LagRecords_Active, true);
 	CFGVAR(Materials_LagRecords_Alpha, 0.3f);
-	CFGVAR(Materials_LagRecords_Material, 1); //0 Original 1 Flat 2 Shaded 3 Glossy 4 Glow 5 Plastic
+	CFGVAR(Materials_LagRecords_Material, 2); //0 Original 1 Flat 2 Shaded 3 Glossy 4 Glow 5 Plastic
 	CFGVAR(Materials_LagRecords_Style, 1); //0 All 1 Last Only
 
 	CFGVAR(Materials_Buildings_Active, false);
@@ -417,7 +416,7 @@ namespace CFG
 	CFGVAR(Outlines_World_Ignore_MVM_Money, false);
 
 	// Misc Enemy - HP-based coloring
-	CFGVAR(Visuals_Enemy_Outline_HP_Based, false); // Color enemy outlines based on HP
+	CFGVAR(Visuals_Enemy_Outline_HP_Based, true); // Color enemy outlines based on HP
 	CFGVAR(Visuals_Enemy_Materials_HP_Based, false); // Color enemy materials based on HP
 	CFGVAR(Misc_Enemy_Custom_Name_Color, false); // Use custom color for all player names
 
@@ -452,7 +451,7 @@ namespace CFG
 	CFGVAR(Visuals_Trajectory_Preview_Active, true); // Enable real-time trajectory preview
 	CFGVAR(Visuals_Trajectory_Preview_Style, 0); // 0=Off, 1=Line, 2=Separators, 3=Spaced, 4=Arrows, 5=Boxes
 	CFGVAR(Visuals_Trajectory_Preview_Box, true); // Draw box at impact point
-	CFGVAR(Visuals_FOV_Override, 100.0f);
+	CFGVAR(Visuals_FOV_Override, 90.0f);
 	CFGVAR(Visuals_Remove_Scope, false);
 	CFGVAR(Visuals_Remove_Zoom, false);
 	CFGVAR(Visuals_Remove_Punch, true);
@@ -472,7 +471,7 @@ namespace CFG
 	CFGVAR(Visuals_ViewModel_Offset_Forward, 0.0f);
 	CFGVAR(Visuals_ViewModel_Offset_Right, 0.0f);
 	CFGVAR(Visuals_ViewModel_Offset_Up, 0.0f);
-	CFGVAR(Visuals_ViewModel_Minimal, false);
+	CFGVAR(Visuals_ViewModel_Minimal, true);
 	CFGVAR(Visuals_Viewmodel_Flip, false);
 	CFGVAR(Visuals_ViewModel_WorldModel, false);
 
@@ -537,9 +536,9 @@ namespace CFG
 	// Chat ESP - chat bubbles above player heads
 	CFGVAR(Visuals_ChatESP_Active, false);
 	CFGVAR(Visuals_ChatESP_Duration, 5.0f);
-	CFGVAR(Visuals_ChatESP_MaxLength, 50);
+	CFGVAR(Visuals_ChatESP_MaxLength, 30);
 	CFGVAR(Visuals_ChatESP_ShowPointer, true);
-	CFGVAR(Visuals_ChatESP_MaxDistance, 2000.0f); // Max distance to show bubbles
+	CFGVAR(Visuals_ChatESP_MaxDistance, 500.0f); // Max distance to show bubbles
 
 	CFGVAR(Visuals_SpyCamera_Active, false);
 	CFGVAR(Visuals_SpyCamera_Background_Alpha, 0.9f);
@@ -588,7 +587,7 @@ namespace CFG
 	CFGVAR(Misc_Taunt_Slide_Control, true);
 	CFGVAR(Misc_Taunt_Spin_Key, 0);
 	CFGVAR(Misc_Taunt_Spin_Speed, 9.0f);
-	CFGVAR(Misc_Taunt_Spin_Sine, true);
+	CFGVAR(Misc_Taunt_Spin_Sine, false);
 	CFGVAR_NOSAVE(Misc_Accuracy_Improvements, true);
 	CFGVAR(Visuals_Disable_Interp, false);
 	CFGVAR(Misc_Pure_Bypass, true);
@@ -616,7 +615,7 @@ namespace CFG
 	CFGVAR(Misc_Auto_Rocket_Jump_Key, 0);
 	CFGVAR(Misc_Auto_Rocket_Jump_Mode, 2); // 0 = Amalgam Style (High), 1 = Forward Style
 	CFGVAR(Misc_Auto_Rocket_Jump_High_Forward_Bias, 138); // 0-2000: Lower = more forward, Higher = more vertical
-	CFGVAR(Misc_Auto_Disguise, true);
+	CFGVAR(Misc_Auto_Disguise, false);
 	CFGVAR(Misc_Auto_Call_Medic_On_Damage, false);
 	CFGVAR(Misc_Auto_Call_Medic_Low_HP, false);
 	CFGVAR(Misc_Auto_Call_Medic_Low_HP_Class, 0);
@@ -647,12 +646,12 @@ namespace CFG
 	CFGVAR(Exploits_Shifting_Recharge_Limit, 24); // 2-24, max ticks to recharge (accounts for fakeangle 2 ticks, anticheat)
 
 	CFGVAR(Exploits_RapidFire_Key, 0);
-	CFGVAR(Exploits_RapidFire_Ticks, 22);
-	CFGVAR(Exploits_RapidFire_Min_Ticks_Target_Same, 5);
+	CFGVAR(Exploits_RapidFire_Ticks, 21);
+	CFGVAR(Exploits_RapidFire_Min_Ticks_Target_Same, 3);
 	CFGVAR(Exploits_RapidFire_Antiwarp, true);
-	CFGVAR(Exploits_RapidFire_Max_Commands, 15);  // Max commands per packet during NORMAL play (lower = better for high ping)
-	CFGVAR(Exploits_RapidFire_DT_Commands, 24);   // Max commands per packet during DOUBLETAP (higher = faster DT)
-	CFGVAR(Exploits_RapidFire_Tick_Tracking, 1);  // 0=Disabled, 1=Linear
+	CFGVAR(Exploits_RapidFire_Max_Commands, 14);  // Max commands per packet during NORMAL play (lower = better for high ping)
+	CFGVAR(Exploits_RapidFire_DT_Commands, 23);   // Max commands per packet during DOUBLETAP (higher = faster DT)
+	CFGVAR(Exploits_RapidFire_Tick_Tracking, 0);  // 0=Disabled, 1=Linear
 	CFGVAR(Exploits_RapidFire_Deficit_Tracking, true);  // Auto-recover when server rejects commands
 	CFGVAR(Exploits_Warp_Key, 0);
 	CFGVAR(Exploits_Warp_Mode, 1); //0 Slow 1 Full
@@ -849,8 +848,8 @@ namespace CFG
 	CFGVAR(Menu_Text_Inactive, Color_t({ 160, 160, 160, 255 }));
 	CFGVAR(Menu_Text_Disabled, Color_t({ 100, 100, 100, 255 }));
 
-	CFGVAR(Menu_Accent_Primary, Color_t({ 1, 18, 246, 255 }));
-	CFGVAR(Menu_Accent_Secondary, Color_t({ 181, 193, 254, 255 }));
+	CFGVAR(Menu_Accent_Primary, Color_t({ 79, 91, 253, 255 }));
+	CFGVAR(Menu_Accent_Secondary, Color_t({ 101, 98, 243, 156 }));
 	CFGVAR(Menu_Accent_Secondary_RGB, false);  // RGB rainbow mode for accent secondary
 	CFGVAR(Menu_Accent_Secondary_RGB_Rate, 3.0f);  // RGB color cycle rate
 	CFGVAR(Menu_Background, Color_t({ 0, 6, 20, 255 }));
@@ -874,7 +873,7 @@ namespace CFG
 	// Exploits tab
 	CFGVAR(Menu_GroupBox_Exploits_Shifting, 0);
 	CFGVAR(Menu_GroupBox_Exploits_FakeLag, 200);
-	CFGVAR(Menu_GroupBox_Exploits_AntiAim, 1);
+	CFGVAR(Menu_GroupBox_Exploits_AntiAim, 202);
 	CFGVAR(Menu_GroupBox_Exploits_Crits, 100);
 	CFGVAR(Menu_GroupBox_Exploits_NoSpread, 201);
 	CFGVAR(Menu_GroupBox_Exploits_RegionSelector, 101);

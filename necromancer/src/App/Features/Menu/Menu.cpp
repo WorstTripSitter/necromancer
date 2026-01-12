@@ -2679,7 +2679,7 @@ void CMenu::MainWindow()
 			GroupBoxStart("Auto Airblast", 150);
 			{
 				CheckBox("Active", CFG::Triggerbot_AutoAirblast_Active);
-				CheckBox("Aim Assist", CFG::Triggerbot_AutoAirblast_Aim_Assist);
+				CheckBox("Aimbot Support", CFG::Triggerbot_AutoAirblast_Aimbot_Support);
 
 				SelectSingle("Mode", CFG::Triggerbot_AutoAirblast_Mode,
 				{
@@ -3836,34 +3836,38 @@ void CMenu::MainWindow()
 
 		// Set up render functions for each GroupBox
 		m_mapGroupBoxes["Exploits_Shifting"].m_fnRenderContent = [this]() {
+			// Keys
 			InputKey("Recharge Key", CFG::Exploits_Shifting_Recharge_Key);
+			InputKey("Doubletap Key", CFG::Exploits_RapidFire_Key);
+			InputKey("Warp Key", CFG::Exploits_Warp_Key);
 			
-			// Recharge limit slider: 2-24 (accounts for fakeangle 2 ticks, anticheat)
+			// Tick limits
 			SliderInt("Recharge Limit", CFG::Exploits_Shifting_Recharge_Limit, 2, 24, 1);
-			
-			InputKey("Double Tap Key", CFG::Exploits_RapidFire_Key);
-			
-			// DT ticks slider: 2-22 (max is 22 to match reference project)
 			const bool bLimitTicks = CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_IgnoreTickLimit;
 			const int nMaxSlider = bLimitTicks ? 8 : 22;
-			std::string sTicksLabel = bLimitTicks ? "Safe Double Tap Ticks" : "Double Tap Ticks";
-			SliderInt(sTicksLabel.c_str(), CFG::Exploits_RapidFire_Ticks, 2, nMaxSlider, 1);
+			SliderInt(bLimitTicks ? "Doubletap Ticks (Safe)" : "Doubletap Ticks", CFG::Exploits_RapidFire_Ticks, 2, nMaxSlider, 1);
+			SliderInt("Doubletap Delay Ticks", CFG::Exploits_RapidFire_Min_Ticks_Target_Same, 0, 5, 1);
 			
-			SliderInt("Double Tap Delay Ticks", CFG::Exploits_RapidFire_Min_Ticks_Target_Same, 0, 5, 1);
-			CheckBox("Double Tap Antiwarp", CFG::Exploits_RapidFire_Antiwarp);
-			SliderInt("Cmds/Packet (Normal)", CFG::Exploits_RapidFire_Max_Commands, 2, 15, 1);
-			SliderInt("Cmds/Packet (DT)", CFG::Exploits_RapidFire_DT_Commands, 15, 24, 1);
+			// Commands per packet
+			SliderInt("Cmds/Packet (Idle)", CFG::Exploits_RapidFire_Max_Commands, 2, 15, 1);
+			SliderInt("Cmds/Packet (Shifting)", CFG::Exploits_RapidFire_DT_Commands, 15, 24, 1);
+			
+			// Warp settings
+			SelectSingle("Warp Mode", CFG::Exploits_Warp_Mode, {
+				{ "Slow", 0 }, { "Full", 1 }
+			});
+			SelectSingle("Warp Exploit", CFG::Exploits_Warp_Exploit, {
+				{ "None", 0 }, { "Fake Peek", 1 }, { "0 Velocity", 2 }
+			});
+			
+			// Tracking & safety
 			SelectSingle("Tick Tracking", CFG::Exploits_RapidFire_Tick_Tracking, {
 				{ "Disabled", 0 }, { "Linear", 1 }
 			});
 			CheckBox("Deficit Tracking", CFG::Exploits_RapidFire_Deficit_Tracking);
-			InputKey("Warp Key", CFG::Exploits_Warp_Key);
-			SelectSingle("Warp Mode", CFG::Exploits_Warp_Mode, {
-				{ "Slow", 0 }, { "Full", 1 }
-			});
-			SelectSingle("Warp Exploit (for 'Full')", CFG::Exploits_Warp_Exploit, {
-				{ "None", 0 }, { "Fake Peek", 1 }, { "0 Velocity", 2 }
-			});
+			CheckBox("Doubletap Antiwarp", CFG::Exploits_RapidFire_Antiwarp);
+			
+			// Visual
 			CheckBox("Draw Indicator", CFG::Exploits_Shifting_Draw_Indicator);
 		};
 
