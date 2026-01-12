@@ -3328,7 +3328,8 @@ void CMenu::MainWindow()
 					{ "Punch", CFG::Visuals_Remove_Punch },
 					{ "Screen Overlay", CFG::Visuals_Remove_Screen_Overlay },
 					{ "Screen Shake", CFG::Visuals_Remove_Screen_Shake },
-					{ "Screen Fade", CFG::Visuals_Remove_Screen_Fade }
+					{ "Screen Fade", CFG::Visuals_Remove_Screen_Fade },
+					{ "MOTD", CFG::Visuals_Remove_MOTD }
 				});
 
 				SelectSingle("Removals Mode", CFG::Visuals_Removals_Mode, {
@@ -3622,6 +3623,16 @@ void CMenu::MainWindow()
 					{ "FBEAM_SHADEIN", CFG::Visuals_Beams_Flag_FBEAM_SHADEIN },
 					{ "FBEAM_SHADEOUT", CFG::Visuals_Beams_Flag_FBEAM_SHADEOUT }
 					});
+			}
+			GroupBoxEnd();
+
+			GroupBoxStart("Chat ESP", 150);
+			{
+				CheckBox("Active", CFG::Visuals_ChatESP_Active);
+				SliderFloat("Duration", CFG::Visuals_ChatESP_Duration, 1.0f, 15.0f, 1.0f, "%.0fs");
+				SliderInt("Max Length", CFG::Visuals_ChatESP_MaxLength, 20, 100, 5);
+				SliderFloat("Max Distance", CFG::Visuals_ChatESP_MaxDistance, 500.0f, 5000.0f, 100.0f, "%.0f");
+				CheckBox("Show Pointer", CFG::Visuals_ChatESP_ShowPointer);
 			}
 			GroupBoxEnd();
 		}

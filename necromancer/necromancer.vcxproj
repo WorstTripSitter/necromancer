@@ -374,6 +374,7 @@
     <ClCompile Include="src\App\Features\amalgam_port\ProjectileSimulation\ProjectileSimulation.cpp" />
     <ClCompile Include="src\App\Features\amalgam_port\Ticks\Ticks.cpp" />
     <ClCompile Include="src\App\Features\AutoQueue\AutoQueue.cpp" />
+    <ClCompile Include="src\App\Features\ChatESP\ChatESP.cpp" />
     <ClCompile Include="src\App\Features\Chat\Chat.cpp" />
     <ClCompile Include="src\App\Features\Crits\Crits.cpp" />
     <ClCompile Include="src\App\Features\EnginePrediction\EnginePrediction.cpp" />
@@ -544,6 +545,7 @@
     <ClInclude Include="src\App\Features\amalgam_port\Ticks\Ticks.h" />
     <ClInclude Include="src\App\Features\AutoQueue\AutoQueue.h" />
     <ClInclude Include="src\App\Features\CFG.h" />
+    <ClInclude Include="src\App\Features\ChatESP\ChatESP.h" />
     <ClInclude Include="src\App\Features\Chat\Chat.h" />
     <ClInclude Include="src\App\Features\Crits\Crits.h" />
     <ClInclude Include="src\App\Features\EnginePrediction\EnginePrediction.h" />

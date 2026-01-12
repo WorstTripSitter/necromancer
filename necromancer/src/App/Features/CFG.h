@@ -459,6 +459,7 @@ namespace CFG
 	CFGVAR(Visuals_Remove_Screen_Overlay, true);
 	CFGVAR(Visuals_Remove_Screen_Shake, true);
 	CFGVAR(Visuals_Remove_Screen_Fade, true);
+	CFGVAR(Visuals_Remove_MOTD, false);
 	CFGVAR(Visuals_Removals_Mode, 1); //0 Everyone 1 Local Only
 	CFGVAR(Visuals_Reveal_Scoreboard, true);
 	CFGVAR(Visuals_Scoreboard_Utility, true);
@@ -532,6 +533,13 @@ namespace CFG
 	CFGVAR(Visuals_Beams_Flag_FBEAM_SOLID, false);
 	CFGVAR(Visuals_Beams_Flag_FBEAM_SHADEIN, true);
 	CFGVAR(Visuals_Beams_Flag_FBEAM_SHADEOUT, true);
+
+	// Chat ESP - chat bubbles above player heads
+	CFGVAR(Visuals_ChatESP_Active, false);
+	CFGVAR(Visuals_ChatESP_Duration, 5.0f);
+	CFGVAR(Visuals_ChatESP_MaxLength, 50);
+	CFGVAR(Visuals_ChatESP_ShowPointer, true);
+	CFGVAR(Visuals_ChatESP_MaxDistance, 2000.0f); // Max distance to show bubbles
 
 	CFGVAR(Visuals_SpyCamera_Active, false);
 	CFGVAR(Visuals_SpyCamera_Background_Alpha, 0.9f);

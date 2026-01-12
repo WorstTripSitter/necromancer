@@ -14,6 +14,7 @@
 #include "../Features/SeedPred/SeedPred.h"
 #include "../Features/Aimbot/AimbotHitscan/AimbotHitscan.h"
 #include "../Features/Triggerbot/AutoSapper/AutoSapper.h"
+#include "../Features/ChatESP/ChatESP.h"
 
 MAKE_HOOK(IEngineVGuiInternal_Paint, Memory::GetVFunc(I::EngineVGui, 14), void, __fastcall,
 	void* ecx, int mode)
@@ -47,6 +48,8 @@ MAKE_HOOK(IEngineVGuiInternal_Paint, Memory::GetVFunc(I::EngineVGui, 14), void, 
 				F::SpyCamera->Run();
 				F::SpyWarning->Run();
 				F::SeedPred->Paint();
+				F::ChatESP->Think();
+				F::ChatESP->Draw();
 			}
 			F::Menu->Run();
 		}

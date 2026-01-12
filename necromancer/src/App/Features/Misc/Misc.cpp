@@ -793,55 +793,76 @@ void CMisc::AutoDisguise(CUserCmd* cmd)
 
 void CMisc::AutoMedigun(CUserCmd* cmd)
 {
-	// Static cache to reduce trace spam
-	static C_TFPlayer* pCachedTarget = nullptr;
+	// Static cache to reduce trace spam - use entity index instead of raw pointer
+	// Raw pointers become dangling after death/level change!
+	static int nCachedTargetIndex = 0;
 	static int nLastUpdateTick = 0;
+	
+	// Helper to safely get cached target from index
+	auto getCachedTarget = [&]() -> C_TFPlayer*
+	{
+		if (nCachedTargetIndex <= 0)
+			return nullptr;
+		
+		// Validate entity still exists in current entity list
+		for (const auto ent : H::Entities->GetGroup(EEntGroup::PLAYERS_TEAMMATES))
+		{
+			if (!ent) continue;
+			auto pl = ent->As<C_TFPlayer>();
+			if (pl && pl->entindex() == nCachedTargetIndex)
+				return pl;
+		}
+		
+		// Entity no longer valid (died, disconnected, level change)
+		nCachedTargetIndex = 0;
+		return nullptr;
+	};
 	
 	// Check if Auto Heal is enabled
 	if (!CFG::AutoUber_AutoHeal_Active)
 	{
-		pCachedTarget = nullptr;
+		nCachedTargetIndex = 0;
 		return;
 	}
 	
 	// Check if enabled: Always On OR triggerbot master switch is active
 	if (!CFG::AutoUber_Always_On && !H::Input->IsDown(CFG::Triggerbot_Key))
 	{
-		pCachedTarget = nullptr;
+		nCachedTargetIndex = 0;
 		return;
 	}
 
 	if (I::EngineVGui->IsGameUIVisible() || I::MatSystemSurface->IsCursorVisible() || SDKUtils::BInEndOfMatch())
 	{
-		pCachedTarget = nullptr;
+		nCachedTargetIndex = 0;
 		return;
 	}
 
 	const auto local = H::Entities->GetLocal();
 	if (!local || local->deadflag() || local->m_iClass() != TF_CLASS_MEDIC)
 	{
-		pCachedTarget = nullptr;
+		nCachedTargetIndex = 0;
 		return;
 	}
 
 	if (local->InCond(TF_COND_TAUNTING) || local->InCond(TF_COND_HALLOWEEN_GHOST_MODE) ||
 		local->InCond(TF_COND_HALLOWEEN_BOMB_HEAD) || local->InCond(TF_COND_HALLOWEEN_KART))
 	{
-		pCachedTarget = nullptr;
+		nCachedTargetIndex = 0;
 		return;
 	}
 
 	const auto weapon = H::Entities->GetWeapon();
 	if (!weapon || weapon->GetWeaponID() != TF_WEAPON_MEDIGUN)
 	{
-		pCachedTarget = nullptr;
+		nCachedTargetIndex = 0;
 		return;
 	}
 
 	const auto medigun = weapon->As<C_WeaponMedigun>();
 	if (!medigun)
 	{
-		pCachedTarget = nullptr;
+		nCachedTargetIndex = 0;
 		return;
 	}
 
@@ -893,6 +914,9 @@ void CMisc::AutoMedigun(CUserCmd* cmd)
 	const int nCurrentTick = I::GlobalVars->tickcount;
 	const bool bShouldUpdateTarget = (nCurrentTick - nLastUpdateTick) >= 5;
 
+	// Get cached target safely (validates entity still exists)
+	C_TFPlayer* pCachedTarget = getCachedTarget();
+	
 	// If we have a cached target, check if still valid
 	if (pCachedTarget && isQuickValid(pCachedTarget))
 	{
@@ -901,11 +925,13 @@ void CMisc::AutoMedigun(CUserCmd* cmd)
 		// If cached target is fully healed, force update
 		if (flPercent >= 0.99f)
 		{
+			nCachedTargetIndex = 0;
 			pCachedTarget = nullptr;
 		}
 	}
 	else
 	{
+		nCachedTargetIndex = 0;
 		pCachedTarget = nullptr;
 	}
 
@@ -939,6 +965,8 @@ void CMisc::AutoMedigun(CUserCmd* cmd)
 			}
 		}
 		
+		// Store entity index instead of raw pointer
+		nCachedTargetIndex = pBestTarget ? pBestTarget->entindex() : 0;
 		pCachedTarget = pBestTarget;
 		
 		// Only send attack command on update ticks to reduce server spam
