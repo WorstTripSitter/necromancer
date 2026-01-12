@@ -431,6 +431,7 @@
     <ClCompile Include="src\App\Hooks\CGameEventManager_FireEventIntern.cpp" />
     <ClCompile Include="src\App\Hooks\CHLClient_CreateMove.cpp" />
     <ClCompile Include="src\App\Hooks\CHudTFCrosshair_ShouldDraw.cpp" />
+    <ClCompile Include="src\App\Hooks\CInventoryManager_ShowItemsPickedUp.cpp" />
     <ClCompile Include="src\App\Hooks\ClientModeShared_DoPostScreenSpaceEffects.cpp" />
     <ClCompile Include="src\App\Hooks\ClientModeShared_OverrideView.cpp" />
     <ClCompile Include="src\App\Hooks\CL_CheckForPureServerWhitelist.cpp" />
@@ -492,6 +493,7 @@
     <ClCompile Include="src\App\Hooks\IVModelRender_DrawModelExecute.cpp" />
     <ClCompile Include="src\App\Hooks\IVModelRender_ForcedMaterialOverride.cpp" />
     <ClCompile Include="src\App\Hooks\KeyValues_SetInt.cpp" />
+    <ClCompile Include="src\App\Hooks\NotificationQueue_Add.cpp" />
     <ClCompile Include="src\App\Hooks\R_ComputeLightingOrigin.cpp" />
     <ClCompile Include="src\App\Hooks\R_DrawSkyBox.cpp" />
     <ClCompile Include="src\App\Hooks\VGuiMenuBuilder_AddMenuItem.cpp" />

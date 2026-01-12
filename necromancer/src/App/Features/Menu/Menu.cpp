@@ -4260,6 +4260,7 @@ void CMenu::MainWindow()
 
 		m_mapGroupBoxes["Misc_Auto"].m_fnRenderContent = [this]() {
 			CheckBox("Auto Casual Queue", CFG::Misc_Auto_Queue);
+			CheckBox("Auto Accept Items", CFG::Misc_Auto_Accept_Items);
 			CheckBox("Auto Disguise", CFG::Misc_Auto_Disguise);
 			CheckBox("Auto Call Medic", CFG::Misc_Auto_Call_Medic_On_Damage);
 			if (CFG::Misc_Auto_Call_Medic_On_Damage) {

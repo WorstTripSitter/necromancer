@@ -161,6 +161,8 @@
     <ClCompile Include="src\App\Features\ChatESP\ChatESP.cpp" />
     <ClCompile Include="src\App\Hooks\CPrediction_RunSimulation.cpp" />
     <ClCompile Include="src\App\Hooks\CTFPlayerShared_ShouldSuppressPrediction.cpp" />
+    <ClCompile Include="src\App\Hooks\CInventoryManager_ShowItemsPickedUp.cpp" />
+    <ClCompile Include="src\App\Hooks\NotificationQueue_Add.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\nlohmann\json_fwd.hpp" />

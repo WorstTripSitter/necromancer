@@ -711,6 +711,7 @@ namespace CFG
 
 	CFGVAR(Misc_Freeze_Queue, false);
 	CFGVAR(Misc_Auto_Queue, false);
+	CFGVAR(Misc_Auto_Accept_Items, false);
 	CFGVAR(Misc_Anti_AFK, true);
 
 	// Region Selector (Force Regions)
