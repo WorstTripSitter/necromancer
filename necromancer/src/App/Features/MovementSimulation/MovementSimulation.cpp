@@ -733,6 +733,56 @@ bool CMovementSimulation::Initialize(C_TFPlayer* pPlayer, MoveStorage& tStorage,
 	// Calculate strafe if desired
 	if (bStrafe)
 		StrafePrediction(tStorage, iStrafeSamples);
+	
+	// =========================================================================
+	// CIRCLE STRAFE SETUP - Set proper forward+side movement for circle strafing
+	// 
+	// The tightness of the circle depends on the ratio of forward to side movement:
+	// - More forward, less side = big wide circle
+	// - Less forward, more side = tight small circle
+	// - Pure side (no forward) = spinning in place
+	// 
+	// avgYaw tells us how fast they're turning:
+	// - avgYaw ~3-4 = slow turn = wide circle = more forward
+	// - avgYaw ~6-8 = fast turn = tight circle = less forward, more side
+	// - avgYaw ~10+ = very fast = very tight = mostly side movement
+	// =========================================================================
+	if (tStorage.m_flAverageYaw != 0.0f)
+	{
+		const float flMaxSpeed = tStorage.m_MoveData.m_flMaxSpeed;
+		const float flAbsYaw = fabsf(tStorage.m_flAverageYaw);
+		
+		// Calculate forward/side ratio based on turn rate
+		// Higher yaw = tighter circle = less forward, more side
+		// Clamp yaw influence between 3 and 12 degrees per tick
+		const float flYawFactor = std::clamp((flAbsYaw - 3.0f) / 9.0f, 0.0f, 1.0f);
+		
+		// Forward: 100% at slow turn (yaw=3), 20% at fast turn (yaw=12)
+		const float flForwardRatio = 1.0f - flYawFactor * 0.8f;
+		
+		// Side: 60% at slow turn, 100% at fast turn
+		const float flSideRatio = 0.6f + flYawFactor * 0.4f;
+		
+		tStorage.m_MoveData.m_flForwardMove = flMaxSpeed * flForwardRatio;
+		
+		// Side direction based on turn direction
+		if (tStorage.m_flAverageYaw > 0)
+			tStorage.m_MoveData.m_flSideMove = flMaxSpeed * flSideRatio;   // Strafe left
+		else
+			tStorage.m_MoveData.m_flSideMove = -flMaxSpeed * flSideRatio;  // Strafe right
+		
+		// Debug
+		static int s_nCSSetup = 0;
+		s_nCSSetup++;
+		if ((s_nCSSetup % 66) == 0)
+		{
+			I::CVar->ConsoleColorPrintf({100, 255, 255, 255}, 
+				"[DEBUG] Circle strafe setup: forward=%.1f (%.0f%%) side=%.1f (%.0f%%) avgYaw=%.2f yawFactor=%.2f\n",
+				tStorage.m_MoveData.m_flForwardMove, flForwardRatio * 100.0f,
+				tStorage.m_MoveData.m_flSideMove, flSideRatio * 100.0f,
+				tStorage.m_flAverageYaw, flYawFactor);
+		}
+	}
 
 	// Run initial ticks for choked commands
 	int nChoke = TIME_TO_TICKS(pPlayer->m_flSimulationTime() - pPlayer->m_flOldSimulationTime());
@@ -783,6 +833,17 @@ bool CMovementSimulation::SetupMoveData(MoveStorage& tStorage)
 				
 				tStorage.m_MoveData.m_flForwardMove = flForwardMove;
 				tStorage.m_MoveData.m_flSideMove = flSideMove;
+				
+				// Debug output
+				static int s_nSetupDebug = 0;
+				s_nSetupDebug++;
+				if ((s_nSetupDebug % 66) == 0)
+				{
+					I::CVar->ConsoleColorPrintf({200, 255, 200, 255}, 
+						"[DEBUG] SetupMoveData: forward=%.1f side=%.1f maxSpeed=%.1f viewYaw=%.1f\n",
+						tStorage.m_MoveData.m_flForwardMove, tStorage.m_MoveData.m_flSideMove,
+						tStorage.m_MoveData.m_flMaxSpeed, tStorage.m_MoveData.m_vecViewAngles.y);
+				}
 			}
 		}
 	}
@@ -809,8 +870,7 @@ bool CMovementSimulation::SetupMoveData(MoveStorage& tStorage)
 }
 
 static inline bool GetYawDifference(MoveData& tRecord1, MoveData& tRecord2, bool bStart, float* pYaw, 
-	float flStraightFuzzyValue, int iMaxChanges, int iMaxChangeTime, float flMaxSpeed,
-	int& iChanges, int& iStart, int& iStaticSign, bool& bStaticZero)
+	float flStraightFuzzyValue, int iMaxChanges = 0, int iMaxChangeTime = 0, float flMaxSpeed = 0.f)
 {
 	const float flYaw1 = Math::VelocityToAngles(tRecord1.m_vDirection).y;
 	const float flYaw2 = Math::VelocityToAngles(tRecord2.m_vDirection).y;
@@ -819,54 +879,38 @@ static inline bool GetYawDifference(MoveData& tRecord1, MoveData& tRecord2, bool
 	const int iTicks = std::max(TIME_TO_TICKS(flTime1 - flTime2), 1);
 
 	*pYaw = Math::NormalizeAngle(flYaw1 - flYaw2);
-	
-	// Scale yaw by speed ratio for ground movement (slower = less turn)
-	if (flMaxSpeed > 0.0f && tRecord1.m_iMode != 1)
+	if (flMaxSpeed && tRecord1.m_iMode != 1)
 		*pYaw *= std::clamp(tRecord1.m_vVelocity.Length2D() / flMaxSpeed, 0.f, 1.f);
-	
-	// Apply air friction scaling for air strafing
-	if (tRecord1.m_iMode == 1) // Air
-		*pYaw /= GetFrictionScale(tRecord1.m_vVelocity.Length2D(), *pYaw, 
-			tRecord1.m_vVelocity.z + GetGravity() * TICK_INTERVAL, 0.f, 56.f);
-	
-	// Reject extreme yaw changes (likely knockback or teleport)
+	if (tRecord1.m_iMode == 1)
+		*pYaw /= GetFrictionScale(tRecord1.m_vVelocity.Length2D(), *pYaw, tRecord1.m_vVelocity.z + GetGravity() * TICK_INTERVAL, 0.f, 56.f);
 	if (fabsf(*pYaw) > 45.f)
 		return false;
 
+	static int iChanges, iStart;
+
+	static int iStaticSign = 0;
 	const int iLastSign = iStaticSign;
 	const int iCurrSign = iStaticSign = *pYaw ? (*pYaw > 0 ? 1 : -1) : iStaticSign;
 
-	const bool bCurrZero = bStaticZero = fabsf(*pYaw) < 0.5f; // More lenient zero check
+	static bool bStaticZero = false;
+	const bool iLastZero = bStaticZero;
+	const bool iCurrZero = bStaticZero = !*pYaw;
 
-	// Direction changed = sign flipped (not just zero)
-	const bool bSignChanged = iLastSign != 0 && iCurrSign != iLastSign;
-	// Straight = very small yaw change relative to speed
+	const bool bChanged = iCurrSign != iLastSign || iCurrZero && iLastZero;
 	const bool bStraight = fabsf(*pYaw) * tRecord1.m_vVelocity.Length2D() * iTicks < flStraightFuzzyValue;
 
 	if (bStart)
 	{
-		iChanges = 0;
-		iStart = TIME_TO_TICKS(flTime1);
-		// On start, only count as change if going straight
+		iChanges = 0, iStart = TIME_TO_TICKS(flTime1);
 		if (bStraight && ++iChanges > iMaxChanges)
 			return false;
 		return true;
 	}
 	else
 	{
-		// For circle strafing: sign should stay consistent
-		// Only count as "change" if sign actually flipped OR went straight
-		if (bSignChanged || (bStraight && !bCurrZero))
-		{
-			if (++iChanges > iMaxChanges)
-				return false;
-		}
-		
-		// Time limit check
-		if (iChanges && iStart - TIME_TO_TICKS(flTime2) > iMaxChangeTime)
+		if ((bChanged || bStraight) && ++iChanges > iMaxChanges)
 			return false;
-		
-		return true;
+		return iChanges && iStart - TIME_TO_TICKS(flTime2) > iMaxChangeTime ? false : true;
 	}
 }
 
@@ -878,78 +922,136 @@ void CMovementSimulation::GetAverageYaw(MoveStorage& tStorage, int iSamples)
 		return;
 	
 	auto& vRecords = m_mRecords[nEntIndex];
-	if (vRecords.empty())
-		return;
-
-	const bool bGroundInit = tStorage.m_bDirectMove;
-	const float flMaxSpeed = pPlayer->TeamFortress_CalculateMaxSpeed();
-	
-	// Cache CFG values once
-	const float flGroundFuzzy = CFG::Aimbot_Projectile_Ground_Straight_Fuzzy;
-	const float flAirFuzzy = CFG::Aimbot_Projectile_Air_Straight_Fuzzy;
-	const int iGroundMaxChanges = CFG::Aimbot_Projectile_Ground_Max_Changes;
-	const int iAirMaxChanges = CFG::Aimbot_Projectile_Air_Max_Changes;
-	const int iGroundMaxChangeTime = CFG::Aimbot_Projectile_Ground_Max_Change_Time;
-	const int iAirMaxChangeTime = CFG::Aimbot_Projectile_Air_Max_Change_Time;
-
-	bool bGround = bGroundInit;
-	int iMinimumStrafes = 4;
-	float flStraightFuzzyValue = bGround ? flGroundFuzzy : flAirFuzzy;
-	int iMaxChanges = bGround ? iGroundMaxChanges : iAirMaxChanges;
-	int iMaxChangeTime = bGround ? iGroundMaxChangeTime : iAirMaxChangeTime;
-
-	float flAverageYaw = 0.f;
-	int iTicks = 0, iSkips = 0;
-	iSamples = std::min(iSamples, static_cast<int>(vRecords.size()));
-	
-	// Local state for GetYawDifference (not static to avoid cross-player pollution)
-	int iChanges = 0, iStart = 0, iStaticSign = 0;
-	bool bStaticZero = false;
-	
-	size_t i = 1;
-	for (; i < static_cast<size_t>(iSamples); i++)
+	if (vRecords.size() < 3)
 	{
-		auto& tRecord1 = vRecords[i - 1];
-		auto& tRecord2 = vRecords[i];
-		
-		if (tRecord1.m_iMode != tRecord2.m_iMode)
-		{
-			iSkips++;
-			continue;
-		}
-
-		bGround = tRecord1.m_iMode != 1;
-		flStraightFuzzyValue = bGround ? flGroundFuzzy : flAirFuzzy;
-		iMaxChanges = bGround ? iGroundMaxChanges : iAirMaxChanges;
-		iMaxChangeTime = bGround ? iGroundMaxChangeTime : iAirMaxChangeTime;
-		iMinimumStrafes = 4 + iMaxChanges;
-
-		float flYaw = 0.f;
-		bool bResult = GetYawDifference(tRecord1, tRecord2, !iTicks, &flYaw, 
-			flStraightFuzzyValue, iMaxChanges, iMaxChangeTime, flMaxSpeed,
-			iChanges, iStart, iStaticSign, bStaticZero);
-		
-		if (!bResult)
-			break;
-
-		flAverageYaw += flYaw;
-		iTicks += std::max(TIME_TO_TICKS(tRecord1.m_flSimTime - tRecord2.m_flSimTime), 1);
+		I::CVar->ConsoleColorPrintf({255, 100, 100, 255}, "[DEBUG] GetAverageYaw: Not enough records (%d)\n", (int)vRecords.size());
+		return;
 	}
 
-	if (i <= static_cast<size_t>(iMinimumStrafes + iSkips))
-		return;
-
-	int iMinimum = 4; // Minimum samples required
-	flAverageYaw /= std::max(iTicks, iMinimum);
+	const float flMaxSpeed = pPlayer->TeamFortress_CalculateMaxSpeed();
+	iSamples = std::min(iSamples, static_cast<int>(vRecords.size()));
 	
-	if (fabsf(flAverageYaw) < 0.36f)
+	float flTotalYaw = 0.0f;
+	int nTotalTicks = 0;
+	int nValidSamples = 0;
+	int nSkippedMode = 0;
+	int nSkippedSpeed = 0;
+	int nSkippedExtreme = 0;
+	
+	for (size_t i = 1; i < static_cast<size_t>(iSamples) && i < vRecords.size(); i++)
+	{
+		auto& rec1 = vRecords[i - 1];
+		auto& rec2 = vRecords[i];
+		
+		// Skip if movement mode changed
+		if (rec1.m_iMode != rec2.m_iMode)
+		{
+			nSkippedMode++;
+			continue;
+		}
+		
+		// Skip if velocity is too low
+		if (rec1.m_vVelocity.Length2D() < 30.0f)
+		{
+			nSkippedSpeed++;
+			continue;
+		}
+		
+		// Calculate yaw change
+		const float flYaw1 = Math::VelocityToAngles(rec1.m_vDirection).y;
+		const float flYaw2 = Math::VelocityToAngles(rec2.m_vDirection).y;
+		float flYawDelta = Math::NormalizeAngle(flYaw1 - flYaw2);
+		
+		// Scale by speed ratio for ground movement
+		if (flMaxSpeed > 0.0f && rec1.m_iMode != 1)
+		{
+			const float flSpeedRatio = std::clamp(rec1.m_vVelocity.Length2D() / flMaxSpeed, 0.1f, 1.0f);
+			flYawDelta *= flSpeedRatio;
+		}
+		
+		// Air strafe friction adjustment
+		if (rec1.m_iMode == 1)
+		{
+			const float flFriction = GetFrictionScale(rec1.m_vVelocity.Length2D(), flYawDelta, 
+				rec1.m_vVelocity.z + GetGravity() * TICK_INTERVAL, 0.f, 56.f);
+			if (flFriction > 0.01f)
+				flYawDelta /= flFriction;
+		}
+		
+		// Skip extreme yaw changes (teleport/lag)
+		if (fabsf(flYawDelta) > 45.0f)
+		{
+			nSkippedExtreme++;
+			continue;
+		}
+		
+		const int nTicks = std::max(TIME_TO_TICKS(rec1.m_flSimTime - rec2.m_flSimTime), 1);
+		flTotalYaw += flYawDelta;
+		nTotalTicks += nTicks;
+		nValidSamples++;
+	}
+	
+	// Debug output
+	static int s_nDebugFrame = 0;
+	s_nDebugFrame++;
+	if ((s_nDebugFrame % 66) == 0)  // Print every ~1 second
+	{
+		I::CVar->ConsoleColorPrintf({255, 255, 100, 255}, 
+			"[DEBUG] GetAverageYaw: records=%d samples=%d valid=%d skipped(mode=%d speed=%d extreme=%d) totalYaw=%.2f ticks=%d\n",
+			(int)vRecords.size(), iSamples, nValidSamples, nSkippedMode, nSkippedSpeed, nSkippedExtreme, flTotalYaw, nTotalTicks);
+	}
+	
+	// Need minimum samples
+	if (nTotalTicks < 3 || nValidSamples < 2)
+	{
+		I::CVar->ConsoleColorPrintf({255, 100, 100, 255}, "[DEBUG] GetAverageYaw: Not enough valid samples (ticks=%d valid=%d)\n", nTotalTicks, nValidSamples);
 		return;
-
-	tStorage.m_flAverageYaw = flAverageYaw;
+	}
+	
+	// Calculate average yaw per tick
+	const float flAverageYaw = flTotalYaw / static_cast<float>(nTotalTicks);
+	
+	// =========================================================================
+	// CIRCLE STRAFE vs COUNTER-STRAFE DETECTION
+	// 
+	// Circle strafe: consistent turning in ONE direction
+	//   - avgYaw should be 4+ degrees per tick (tight circle = 6-10)
+	//   - All yaw changes should be same sign (all positive or all negative)
+	// 
+	// Counter-strafe: alternating left-right
+	//   - avgYaw is low (0-3) because left and right cancel out
+	//   - Yaw changes alternate between positive and negative
+	// 
+	// Threshold: 4.0 degrees per tick minimum for circle strafe
+	// This prevents counter-strafing from being detected as circle strafe
+	// =========================================================================
+	
+	if (fabsf(flAverageYaw) >= 4.0f)
+	{
+		// Strong consistent turning - definitely circle strafing
+		tStorage.m_flAverageYaw = flAverageYaw;
+		I::CVar->ConsoleColorPrintf({100, 255, 100, 255}, "[DEBUG] CIRCLE STRAFE DETECTED: avgYaw=%.3f (strong)\n", flAverageYaw);
+	}
+	else if (fabsf(flAverageYaw) >= 2.0f)
+	{
+		// Medium turning - could be slow circle strafe or biased counter-strafe
+		// Only use if we have enough samples to be confident
+		if (nValidSamples >= 8)
+		{
+			tStorage.m_flAverageYaw = flAverageYaw;
+			I::CVar->ConsoleColorPrintf({255, 255, 100, 255}, "[DEBUG] CIRCLE STRAFE DETECTED: avgYaw=%.3f (medium, %d samples)\n", flAverageYaw, nValidSamples);
+		}
+		else
+		{
+			I::CVar->ConsoleColorPrintf({255, 200, 100, 255}, "[DEBUG] GetAverageYaw: Medium yaw (%.3f) but not enough samples (%d < 8)\n", flAverageYaw, nValidSamples);
+		}
+	}
+	else
+	{
+		// Low average yaw - likely counter-strafing or straight movement
+		I::CVar->ConsoleColorPrintf({255, 200, 100, 255}, "[DEBUG] GetAverageYaw: Below threshold (avgYaw=%.3f < 2.0) - likely counter-strafe\n", flAverageYaw);
+	}
 }
-
-// Counter-strafe spam detection removed - was causing false positives with circle strafing
-// The normal strafe prediction handles this case adequately
 
 bool CMovementSimulation::StrafePrediction(MoveStorage& tStorage, int iSamples)
 {
@@ -964,103 +1066,219 @@ bool CMovementSimulation::StrafePrediction(MoveStorage& tStorage, int iSamples)
 			return false;
 	}
 
-	auto pPlayer = tStorage.m_pPlayer;
-	const int nEntIndex = pPlayer->entindex();
-	auto* pBehavior = (nEntIndex >= 1 && nEntIndex < 64) ? GetPlayerBehavior(nEntIndex) : nullptr;
-
-	// Normal strafe prediction (circle strafing) - do this FIRST
-	// This is the primary prediction method
+	// Try circle strafe detection first
 	GetAverageYaw(tStorage, iSamples);
 	
-	// If we got a valid strafe prediction, use it
+	// If we got a valid average yaw, it's circle strafing
 	if (tStorage.m_flAverageYaw != 0.0f)
 	{
-		// Base: Use average yaw (this is the Amalgam approach that works well)
-		// Enhancement: If we have learned quadrant data, enable quadrant mode for fine-tuning
-		tStorage.m_bCircleStrafeMode = false;
-		
-		// Only enable quadrant mode if we have GOOD data (many samples, low variance)
-		if (pBehavior && pBehavior->m_Strafe.m_bIsCircleStrafing)
-		{
-			// Check if we have enough samples in each quadrant
-			int nMinSamples = 999;
-			for (int i = 0; i < 4; i++)
-				nMinSamples = std::min(nMinSamples, pBehavior->m_Strafe.m_nQuadrantSamples[i]);
-			
-			// Only use quadrant mode if we have at least 3 samples in EVERY quadrant
-			// AND the variance is low (consistent strafing)
-			if (nMinSamples >= 3 && pBehavior->m_Strafe.m_flYawRateVariance < 2.0f)
-			{
-				tStorage.m_bCircleStrafeMode = true;
-				tStorage.m_nCircleStrafeDir = pBehavior->m_Strafe.m_nCircleStrafeDirection;
-				tStorage.m_nCurrentQuadrant = pBehavior->m_Strafe.m_nLastQuadrant;
-				if (tStorage.m_nCurrentQuadrant < 0 || tStorage.m_nCurrentQuadrant > 3)
-					tStorage.m_nCurrentQuadrant = 0;
-				
-				// Copy learned quadrant yaw rates
-				for (int i = 0; i < 4; i++)
-				{
-					tStorage.m_flQuadrantTiming[i] = pBehavior->m_Strafe.m_flQuadrantTime[i];
-					tStorage.m_flQuadrantYawRate[i] = pBehavior->m_Strafe.m_flQuadrantYawRate[i];
-				}
-				
-				// Calculate how long they've been in current quadrant
-				const float flCurTime = I::GlobalVars ? I::GlobalVars->curtime : 0.0f;
-				tStorage.m_flTimeInQuadrant = flCurTime - pBehavior->m_Strafe.m_flLastQuadrantChangeTime;
-				if (tStorage.m_flTimeInQuadrant < 0.0f || tStorage.m_flTimeInQuadrant > 0.5f)
-					tStorage.m_flTimeInQuadrant = 0.0f;
-				
-				// Use the yaw rate for current quadrant (fallback to average if invalid)
-				tStorage.m_flYawPerTick = tStorage.m_flQuadrantYawRate[tStorage.m_nCurrentQuadrant];
-				if (fabsf(tStorage.m_flYawPerTick) < 0.5f || fabsf(tStorage.m_flYawPerTick) > 15.0f)
-					tStorage.m_flYawPerTick = tStorage.m_flAverageYaw;
-			}
-		}
-		
+		static int s_nDebugFrame2 = 0;
+		s_nDebugFrame2++;
+		if ((s_nDebugFrame2 % 66) == 0)
+			I::CVar->ConsoleColorPrintf({100, 255, 100, 255}, "[DEBUG] StrafePrediction: Using CIRCLE STRAFE (yaw=%.3f)\n", tStorage.m_flAverageYaw);
 		return true;
 	}
-
-	// Only check for counter-strafe if normal strafe prediction failed
-	// Counter-strafing (A-D spam) results in near-zero average yaw
-	if (nEntIndex >= 1 && nEntIndex < 64 && tStorage.m_bDirectMove)
+	
+	// =========================================================================
+	// COUNTER-STRAFE DETECTION (A-D spam)
+	// =========================================================================
+	if (tStorage.m_bDirectMove)
 	{
-		// Check learned behavior - only use if we have strong evidence
+		auto pPlayer = tStorage.m_pPlayer;
+		const int nEntIndex = pPlayer->entindex();
+		if (nEntIndex < 1 || nEntIndex >= 64)
+			return true;
+		
+		auto& vRecords = m_mRecords[nEntIndex];
+		if (vRecords.size() < 4)
+			return true;
+		
+		// Get player's forward direction (from view angles or velocity)
+		Vec3 vForward;
+		Math::AngleVectors(tStorage.m_MoveData.m_vecViewAngles, &vForward, nullptr, nullptr);
+		vForward.z = 0;
+		if (vForward.Length2D() < 0.1f)
+		{
+			// Fallback: use velocity direction as forward
+			vForward = tStorage.m_MoveData.m_vecVelocity;
+			vForward.z = 0;
+		}
+		vForward.NormalizeInPlace();
+		
+		// Right vector (perpendicular to forward)
+		Vec3 vRight = Vec3(-vForward.y, vForward.x, 0);
+		
+		// Track lateral velocity sign changes
+		// Lateral = dot(velocity, right) - positive = going right, negative = going left
+		int nSignChanges = 0;
+		int nLastSign = 0;
+		float flTotalTime = 0.0f;
+		float flLastChangeTime = 0.0f;
+		float flAvgTimeBetweenChanges = 0.0f;
+		int nChangeCount = 0;
+		
+		const float flCurTime = vRecords[0].m_flSimTime;
+		
+		for (size_t i = 0; i < std::min(vRecords.size(), size_t(20)); i++)
+		{
+			auto& rec = vRecords[i];
+			
+			// Only check ground movement
+			if (rec.m_iMode != 0)
+				continue;
+			
+			// Skip if too old (only look at last 1 second)
+			if (flCurTime - rec.m_flSimTime > 1.0f)
+				break;
+			
+			// Get lateral velocity component
+			Vec3 vVel = rec.m_vVelocity;
+			vVel.z = 0;
+			
+			// Need some speed to detect strafing
+			if (vVel.Length2D() < 50.0f)
+				continue;
+			
+			const float flLateral = vVel.Dot(vRight);
+			
+			// Need significant lateral movement (not just walking forward)
+			if (fabsf(flLateral) < 30.0f)
+				continue;
+			
+			const int nSign = (flLateral > 0) ? 1 : -1;
+			
+			// Count sign changes (direction reversals)
+			if (nLastSign != 0 && nSign != nLastSign)
+			{
+				nSignChanges++;
+				
+				// Track time between changes
+				if (flLastChangeTime > 0.0f)
+				{
+					const float flTimeDelta = flLastChangeTime - rec.m_flSimTime;
+					if (flTimeDelta > 0.02f && flTimeDelta < 0.6f)
+					{
+						flAvgTimeBetweenChanges += flTimeDelta;
+						nChangeCount++;
+					}
+				}
+				flLastChangeTime = rec.m_flSimTime;
+			}
+			
+			nLastSign = nSign;
+			flTotalTime = flCurTime - rec.m_flSimTime;
+		}
+		
+		// Counter-strafe detected if:
+		// - At least 3 direction reversals (L-R-L-R pattern) - more strict
+		// - Within reasonable time window
+		// - Changes happen at reasonable intervals (not too fast, not too slow)
+		const bool bHasPattern = nSignChanges >= 3;
+		const bool bReasonableTime = flTotalTime > 0.15f && flTotalTime < 0.8f;
+		const bool bReasonableRate = nChangeCount >= 2 && (flAvgTimeBetweenChanges / nChangeCount) < 0.4f;
+		
+		// Debug output for counter-strafe
+		static int s_nCSDebug = 0;
+		s_nCSDebug++;
+		if ((s_nCSDebug % 66) == 0)
+		{
+			I::CVar->ConsoleColorPrintf({200, 200, 255, 255}, 
+				"[DEBUG] CounterStrafe check: signChanges=%d time=%.2f changeCount=%d avgTime=%.3f | pattern=%d time=%d rate=%d\n",
+				nSignChanges, flTotalTime, nChangeCount, 
+				nChangeCount > 0 ? flAvgTimeBetweenChanges / nChangeCount : 0.0f,
+				bHasPattern, bReasonableTime, bReasonableRate);
+		}
+		
+		if (bHasPattern && bReasonableTime && bReasonableRate)
+		{
+			tStorage.m_bCounterStrafe = true;
+			I::CVar->ConsoleColorPrintf({255, 100, 255, 255}, "[DEBUG] COUNTER-STRAFE DETECTED!\n");
+			
+			// Get current strafe direction from most recent lateral velocity
+			Vec3 vVel = pPlayer->m_vecVelocity();
+			vVel.z = 0;
+			const float flLateral = vVel.Dot(vRight);
+			tStorage.m_nCSDirection = (flLateral > 0) ? 1 : -1;
+			
+			// Calculate switch time from observed pattern
+			if (nChangeCount > 0)
+				tStorage.m_flCSSwitchTime = flAvgTimeBetweenChanges / nChangeCount;
+			else
+				tStorage.m_flCSSwitchTime = 0.15f;
+			
+			// Clamp to reasonable values
+			tStorage.m_flCSSwitchTime = std::clamp(tStorage.m_flCSSwitchTime, 0.06f, 0.45f);
+			
+			// Estimate how long they've been in current direction
+			// Use time since last sign change
+			if (flLastChangeTime > 0.0f)
+				tStorage.m_flCSTimeInDir = flCurTime - flLastChangeTime;
+			else
+				tStorage.m_flCSTimeInDir = 0.0f;
+			
+			// Use learned behavior if available for better timing
+			auto* pBehavior = GetPlayerBehavior(nEntIndex);
+			if (pBehavior && pBehavior->m_Strafe.m_nLeftToRightSamples > 5)
+			{
+				// Use their learned directional timing
+				if (tStorage.m_nCSDirection == -1)  // Going left, will switch to right
+					tStorage.m_flCSSwitchTime = pBehavior->m_Strafe.m_flAvgTimeLeftToRight;
+				else  // Going right, will switch to left
+					tStorage.m_flCSSwitchTime = pBehavior->m_Strafe.m_flAvgTimeRightToLeft;
+				
+				tStorage.m_flCSSwitchTime = std::clamp(tStorage.m_flCSSwitchTime, 0.06f, 0.45f);
+			}
+			
+			return true;
+		}
+		
+		// =====================================================================
+		// PREDICTIVE COUNTER-STRAFE
+		// Even if not currently detected, check if this player has a history
+		// of counter-strafing and just changed direction
+		// =====================================================================
 		if (ShouldPredictCounterStrafe(nEntIndex))
 		{
-			tStorage.m_bCounterStrafeSpam = true;
+			tStorage.m_bCounterStrafe = true;
 			
-			// Initialize counter-strafe simulation state
+			auto* pBehavior = GetPlayerBehavior(nEntIndex);
 			if (pBehavior)
 			{
-				// Get current strafe direction from behavior tracking
-				tStorage.m_nCSCurrentDir = pBehavior->m_Strafe.m_nLastStrafeSign;
-				if (tStorage.m_nCSCurrentDir == 0)
-					tStorage.m_nCSCurrentDir = 1;  // Default to right if unknown
+				// Use their current direction
+				tStorage.m_nCSDirection = pBehavior->m_Strafe.m_nLastStrafeSign;
+				if (tStorage.m_nCSDirection == 0)
+				{
+					// Fallback: use current lateral velocity
+					Vec3 vVel = pPlayer->m_vecVelocity();
+					vVel.z = 0;
+					const float flLateral = vVel.Dot(vRight);
+					tStorage.m_nCSDirection = (flLateral > 0) ? 1 : -1;
+				}
 				
-				// Calculate how long they've been in current direction
+				// Use learned timing
+				tStorage.m_flCSSwitchTime = pBehavior->m_Strafe.GetPredictedTimeToReversal(tStorage.m_nCSDirection);
+				tStorage.m_flCSSwitchTime = std::clamp(tStorage.m_flCSSwitchTime, 0.06f, 0.45f);
+				
+				// Estimate time in current direction
 				const float flCurTime = I::GlobalVars ? I::GlobalVars->curtime : 0.0f;
-				tStorage.m_flCSTimeInCurrentDir = flCurTime - pBehavior->m_Strafe.m_flLastDirectionChangeTime;
-				if (tStorage.m_flCSTimeInCurrentDir < 0.0f || tStorage.m_flCSTimeInCurrentDir > 1.0f)
-					tStorage.m_flCSTimeInCurrentDir = 0.0f;
-				
-				// Get their learned timing for direction switches
-				// Use the timing for the CURRENT direction (when will they switch?)
-				if (tStorage.m_nCSCurrentDir == -1)  // Going left, will switch to right
-					tStorage.m_flCSTimeToSwitch = pBehavior->m_Strafe.m_flAvgTimeLeftToRight;
-				else  // Going right, will switch to left
-					tStorage.m_flCSTimeToSwitch = pBehavior->m_Strafe.m_flAvgTimeRightToLeft;
-				
-				// Clamp to reasonable values
-				tStorage.m_flCSTimeToSwitch = std::clamp(tStorage.m_flCSTimeToSwitch, 0.08f, 0.35f);
-				
-				// Store starting yaw for reference
-				tStorage.m_flCSStartYaw = tStorage.m_MoveData.m_vecViewAngles.y;
+				tStorage.m_flCSTimeInDir = flCurTime - pBehavior->m_Strafe.m_flLastDirectionChangeTime;
+				tStorage.m_flCSTimeInDir = std::max(tStorage.m_flCSTimeInDir, 0.0f);
+			}
+			else
+			{
+				// No behavior data, use defaults
+				Vec3 vVel = pPlayer->m_vecVelocity();
+				vVel.z = 0;
+				const float flLateral = vVel.Dot(vRight);
+				tStorage.m_nCSDirection = (flLateral > 0) ? 1 : -1;
+				tStorage.m_flCSSwitchTime = 0.15f;
+				tStorage.m_flCSTimeInDir = 0.0f;
 			}
 			
 			return true;
 		}
 	}
-
+	
 	return true;
 }
 
@@ -1077,158 +1295,87 @@ void CMovementSimulation::RunTick(MoveStorage& tStorage, bool bPath)
 	I::Prediction->m_bFirstTimePredicted = false;
 	I::GlobalVars->frametime = I::Prediction->m_bEnginePaused ? 0.f : TICK_INTERVAL;
 
+	// Adjust bounds for non-local players to fix origin compression issues
+	const bool bIsLocalPlayer = (tStorage.m_pPlayer == H::Entities->GetLocal());
+	if (!bIsLocalPlayer)
+		SetBounds(tStorage.m_pPlayer);
+
 	float flCorrection = 0.f;
-	float flStrafeMultiplier = 1.0f;
 	
-	// =========================================================================
-	// BEHAVIOR-BASED STRAFE MULTIPLIER - Reduce strafe prediction for certain states
-	// =========================================================================
-	PlayerBehavior* pBehavior = tStorage.m_pCachedBehavior;
-	if (pBehavior && pBehavior->m_nSampleCount > 30)
+	// Debug: Show which prediction mode is being used (once per Initialize, not per tick)
+	static int s_nRunTickDebug = 0;
+	s_nRunTickDebug++;
+	if ((s_nRunTickDebug % 200) == 1)  // First tick of each prediction
 	{
-		const float flCurTime = I::GlobalVars->curtime;
-		const bool bRecentlyAttacking = (flCurTime - pBehavior->m_Combat.m_flLastAttackTime) < 0.5f;
-		
-		// Currently attacking = focused on aiming, less strafe
-		if (bRecentlyAttacking && pBehavior->m_Combat.m_flAttackPredictability > 0.5f)
-		{
-			flStrafeMultiplier = 0.4f + (1.0f - pBehavior->m_Combat.m_flAttackPredictability) * 0.4f;
-		}
-		
-		// Class-specific adjustments
-		switch (pBehavior->m_nPlayerClass)
-		{
-		case TF_CLASS_HEAVY:
-			if (bRecentlyAttacking)
-				flStrafeMultiplier = 0.25f;
-			break;
-		case TF_CLASS_SNIPER:
-			if (tStorage.m_bCachedAiming)
-				flStrafeMultiplier = 0.15f;
-			break;
-		case TF_CLASS_SCOUT:
-			flStrafeMultiplier *= 1.1f;
-			break;
-		}
-		
-		flStrafeMultiplier = std::clamp(flStrafeMultiplier, 0.15f, 1.3f);
+		if (tStorage.m_bCounterStrafe && tStorage.m_bDirectMove)
+			I::CVar->ConsoleColorPrintf({255, 100, 255, 255}, "[DEBUG] RunTick: Using COUNTER-STRAFE mode\n");
+		else if (tStorage.m_flAverageYaw != 0.0f)
+			I::CVar->ConsoleColorPrintf({100, 255, 100, 255}, "[DEBUG] RunTick: Using CIRCLE STRAFE mode (yaw=%.3f)\n", tStorage.m_flAverageYaw);
+		else
+			I::CVar->ConsoleColorPrintf({255, 255, 255, 255}, "[DEBUG] RunTick: Using STRAIGHT LINE mode (no strafe detected)\n");
 	}
 	
 	// =========================================================================
-	// APPLY MOVEMENT PREDICTION
+	// COUNTER-STRAFE PREDICTION - Oscillate left/right
+	// This simulates A-D spam by alternating side movement
 	// =========================================================================
-	
-	// Apply counter-strafe spam prediction (A-D spam) - simulate actual L-R-L pattern
-	if (tStorage.m_bCounterStrafeSpam && tStorage.m_bDirectMove)
+	if (tStorage.m_bCounterStrafe && tStorage.m_bDirectMove)
 	{
-		// Simulate the counter-strafe pattern tick by tick
-		// Each tick, check if it's time to switch direction
+		// Track time in current direction
+		tStorage.m_flCSTimeInDir += TICK_INTERVAL;
 		
-		tStorage.m_flCSTimeInCurrentDir += TICK_INTERVAL;
-		
-		// Check if it's time to switch direction
-		if (tStorage.m_flCSTimeInCurrentDir >= tStorage.m_flCSTimeToSwitch)
+		// Switch direction when time is up
+		if (tStorage.m_flCSTimeInDir >= tStorage.m_flCSSwitchTime)
 		{
-			// Switch direction
-			tStorage.m_nCSCurrentDir = -tStorage.m_nCSCurrentDir;
-			tStorage.m_flCSTimeInCurrentDir = 0.0f;
+			tStorage.m_nCSDirection = -tStorage.m_nCSDirection;
+			tStorage.m_flCSTimeInDir = 0.0f;
 			
-			// Update timing for next switch based on new direction
-			PlayerBehavior* pBehavior = tStorage.m_pCachedBehavior;
-			if (pBehavior)
+			// Update switch time for next direction (may be asymmetric)
+			if (tStorage.m_pCachedBehavior)
 			{
-				if (tStorage.m_nCSCurrentDir == -1)  // Now going left, will switch to right
-					tStorage.m_flCSTimeToSwitch = pBehavior->m_Strafe.m_flAvgTimeLeftToRight;
-				else  // Now going right, will switch to left
-					tStorage.m_flCSTimeToSwitch = pBehavior->m_Strafe.m_flAvgTimeRightToLeft;
-				
-				tStorage.m_flCSTimeToSwitch = std::clamp(tStorage.m_flCSTimeToSwitch, 0.08f, 0.35f);
+				tStorage.m_flCSSwitchTime = tStorage.m_pCachedBehavior->m_Strafe.GetPredictedTimeToReversal(tStorage.m_nCSDirection);
+				tStorage.m_flCSSwitchTime = std::clamp(tStorage.m_flCSSwitchTime, 0.06f, 0.45f);
 			}
 		}
 		
-		// Apply strafe movement in current direction
-		// Use the base yaw and strafe perpendicular to it
-		tStorage.m_MoveData.m_vecViewAngles.y = tStorage.m_flCSStartYaw;
-		tStorage.m_MoveData.m_flForwardMove = 0.0f;  // No forward movement during A-D spam
-		tStorage.m_MoveData.m_flSideMove = tStorage.m_MoveData.m_flMaxSpeed * static_cast<float>(tStorage.m_nCSCurrentDir);
+		// Apply side movement in current direction
+		// The key insight: counter-strafing is PURE lateral movement
+		// They're not really going forward, they're just going left-right
+		const float flStrafeSpeed = tStorage.m_MoveData.m_flMaxSpeed * 0.85f;
+		tStorage.m_MoveData.m_flSideMove = flStrafeSpeed * static_cast<float>(tStorage.m_nCSDirection);
+		
+		// Reduce forward movement during counter-strafe (they're focused on dodging)
+		// Most players slow down their forward movement when A-D spamming
+		tStorage.m_MoveData.m_flForwardMove *= 0.3f;
 	}
+	// =========================================================================
+	// CIRCLE STRAFE PREDICTION - Just apply the yaw change
+	// The movement simulation will handle the rest correctly
+	// =========================================================================
 	else if (tStorage.m_flAverageYaw)
 	{
-		// =====================================================================
-		// CIRCLE STRAFE PREDICTION
-		// Base: Use average yaw (Amalgam approach - reliable)
-		// Enhancement: If quadrant mode enabled, use per-quadrant yaw rate
-		// =====================================================================
+		float flMult = 1.f;
 		
-		float flYawToApply = tStorage.m_flAverageYaw;
-		
-		// If quadrant mode is enabled, use the learned per-quadrant yaw rate
-		if (tStorage.m_bCircleStrafeMode)
-		{
-			// Track time in quadrant
-			tStorage.m_flTimeInQuadrant += TICK_INTERVAL;
-			
-			// Check if it's time to move to next quadrant
-			const float flTimeForThisQuadrant = tStorage.m_flQuadrantTiming[tStorage.m_nCurrentQuadrant];
-			if (tStorage.m_flTimeInQuadrant >= flTimeForThisQuadrant)
-			{
-				// Move to next quadrant
-				const int nOldQuadrant = tStorage.m_nCurrentQuadrant;
-				if (tStorage.m_nCircleStrafeDir > 0)
-					tStorage.m_nCurrentQuadrant = (tStorage.m_nCurrentQuadrant + 1) % 4;  // Clockwise
-				else
-					tStorage.m_nCurrentQuadrant = (tStorage.m_nCurrentQuadrant + 3) % 4;  // Counter-clockwise
-				
-				tStorage.m_flTimeInQuadrant = 0.0f;
-				
-				// Update yaw rate for new quadrant
-				tStorage.m_flYawPerTick = tStorage.m_flQuadrantYawRate[tStorage.m_nCurrentQuadrant];
-				
-				// Sanity check - if learned rate is way off, fall back to average
-				if (fabsf(tStorage.m_flYawPerTick) < 0.5f || fabsf(tStorage.m_flYawPerTick) > 15.0f)
-					tStorage.m_flYawPerTick = tStorage.m_flAverageYaw;
-			}
-			
-			// Use the per-quadrant yaw rate instead of average
-			// But blend it with average to avoid sudden jumps (70% quadrant, 30% average)
-			flYawToApply = tStorage.m_flYawPerTick * 0.7f + tStorage.m_flAverageYaw * 0.3f;
-		}
-		
-		// Apply the yaw change
-		float flMult = flStrafeMultiplier;
+		// Air strafe correction
 		if (!tStorage.m_bDirectMove && !tStorage.m_pPlayer->InCond(TF_COND_SHIELD_CHARGE))
 		{
-			flCorrection = 90.f * (flYawToApply > 0 ? 1.f : -1.f);
-			flMult *= GetFrictionScale(tStorage.m_MoveData.m_vecVelocity.Length2D(), flYawToApply,
+			flCorrection = 90.f * (tStorage.m_flAverageYaw > 0 ? 1.f : -1.f);
+			flMult = GetFrictionScale(tStorage.m_MoveData.m_vecVelocity.Length2D(), tStorage.m_flAverageYaw, 
 				tStorage.m_MoveData.m_vecVelocity.z + GetGravity() * TICK_INTERVAL);
 		}
-		tStorage.m_MoveData.m_vecViewAngles.y += flYawToApply * flMult + flCorrection;
+		
+		// Just apply the yaw change - that's all circle strafing is
+		tStorage.m_MoveData.m_vecViewAngles.y += tStorage.m_flAverageYaw * flMult + flCorrection;
 	}
 	else if (!tStorage.m_bDirectMove)
-	{
-		// In air with no strafe pattern - just continue current trajectory
 		tStorage.m_MoveData.m_flForwardMove = tStorage.m_MoveData.m_flSideMove = 0.f;
-	}
-	
-	// NOTE: Direction bias removed - was causing weird arcs at end of prediction
-	// The dodge prediction in the aimbot handles this better by adjusting aim angles
-	// rather than modifying movement simulation
 
 	float flOldSpeed = tStorage.m_MoveData.m_flClientMaxSpeed;
 	bool bSwimmingTick = tStorage.m_pPlayer->m_nWaterLevel() >= 2;
 	if (tStorage.m_pPlayer->m_bDucked() && (tStorage.m_pPlayer->m_fFlags() & FL_ONGROUND) && !bSwimmingTick)
 		tStorage.m_MoveData.m_flClientMaxSpeed /= 3.f;
 
-	// Adjust bounds for non-local players to fix origin compression issues
-	const bool bIsLocalPlayer = (tStorage.m_pPlayer == H::Entities->GetLocal());
-	if (!bIsLocalPlayer)
-		SetBounds(tStorage.m_pPlayer);
-
 	I::GameMovement->ProcessMovement(tStorage.m_pPlayer, &tStorage.m_MoveData);
-
-	// Restore bounds after movement
-	if (!bIsLocalPlayer)
-		RestoreBounds(tStorage.m_pPlayer);
 
 	tStorage.m_MoveData.m_flClientMaxSpeed = flOldSpeed;
 
@@ -1244,55 +1391,28 @@ void CMovementSimulation::RunTick(MoveStorage& tStorage, bool bPath)
 	bool bSwimmingAfter = tStorage.m_pPlayer->m_nWaterLevel() >= 2;
 	tStorage.m_bDirectMove = (tStorage.m_pPlayer->m_fFlags() & FL_ONGROUND) || bSwimmingAfter;
 
-	if (tStorage.m_flAverageYaw && !tStorage.m_bCounterStrafeSpam)
-	{
+	if (tStorage.m_flAverageYaw && !tStorage.m_bCounterStrafe)
 		tStorage.m_MoveData.m_vecViewAngles.y -= flCorrection;
-	}
 	else if (tStorage.m_bDirectMove && !bLastDirectMove
 		&& !tStorage.m_MoveData.m_flForwardMove && !tStorage.m_MoveData.m_flSideMove
 		&& tStorage.m_MoveData.m_vecVelocity.Length2D() > tStorage.m_MoveData.m_flMaxSpeed * 0.015f)
 	{
-		// Just landed - predict they'll continue moving in their LOOK direction, not air velocity
-		// When landing, players typically hold W and move where they're looking
-		// Use eye angles to determine intended movement direction
-		Vec3 vEyeAngles = tStorage.m_pPlayer->GetEyeAngles();
-		Vec3 vForward;
-		Math::AngleVectors(vEyeAngles, &vForward, nullptr, nullptr);
+		Vec3 vDirection = tStorage.m_MoveData.m_vecVelocity;
+		vDirection.z = 0;
+		vDirection.NormalizeInPlace();
+		vDirection = vDirection * 450.f;
 		
-		// Project to 2D (ground plane)
-		vForward.z = 0;
-		if (!vForward.IsZero())
-		{
-			vForward.NormalizeInPlace();
-			vForward = vForward * 450.f;
-			
-			// Set view angles to match eye direction for proper movement
-			tStorage.m_MoveData.m_vecViewAngles = { 0.f, vEyeAngles.y, 0.f };
-			
-			// Convert to movement inputs
-			float flForwardMove = vForward.x;
-			float flSideMove = -vForward.y;
-			Math::FixMovement(flForwardMove, flSideMove, Vec3(0, 0, 0), tStorage.m_MoveData.m_vecViewAngles);
-			
-			tStorage.m_MoveData.m_flForwardMove = flForwardMove;
-			tStorage.m_MoveData.m_flSideMove = flSideMove;
-		}
-		else
-		{
-			// Fallback to velocity direction if eye angles aren't available
-			Vec3 vDirection = tStorage.m_MoveData.m_vecVelocity;
-			vDirection.z = 0;
-			vDirection.NormalizeInPlace();
-			vDirection = vDirection * 450.f;
-			
-			float flForwardMove = vDirection.x;
-			float flSideMove = -vDirection.y;
-			Math::FixMovement(flForwardMove, flSideMove, Vec3(0, 0, 0), tStorage.m_MoveData.m_vecViewAngles);
-			
-			tStorage.m_MoveData.m_flForwardMove = flForwardMove;
-			tStorage.m_MoveData.m_flSideMove = flSideMove;
-		}
+		float flForwardMove = vDirection.x;
+		float flSideMove = -vDirection.y;
+		Math::FixMovement(flForwardMove, flSideMove, Vec3(0, 0, 0), tStorage.m_MoveData.m_vecViewAngles);
+		
+		tStorage.m_MoveData.m_flForwardMove = flForwardMove;
+		tStorage.m_MoveData.m_flSideMove = flSideMove;
 	}
+
+	// Restore bounds after movement
+	if (!bIsLocalPlayer)
+		RestoreBounds(tStorage.m_pPlayer);
 }
 
 void CMovementSimulation::Restore(MoveStorage& tStorage)
@@ -1382,12 +1502,14 @@ void CMovementSimulation::OnShotFired(int nTargetEntIndex)
 // 
 // Simple approach:
 //   1. Track when player changes strafe direction (yaw change sign flips)
-//   2. Detect pattern: LEFT → RIGHT → LEFT (or R→L→R) within 0.25s per change
+//   2. Detect pattern: LEFT → RIGHT → LEFT (or R→L→R) within 0.45s per change
 //   3. Count how often this player counter-strafes
 //   4. Remember this for future encounters
 //
 // The key insight: A-D spam causes the velocity YAW to oscillate back and forth
 // We just need to detect when the yaw change direction reverses quickly
+// 
+// NOTE: Some players strafe with ~0.35s timing, so we use 0.45s max to catch them
 // ============================================================================
 void CMovementSimulation::LearnCounterStrafe(int nEntIndex, PlayerBehavior& behavior)
 {
@@ -1428,7 +1550,7 @@ void CMovementSimulation::LearnCounterStrafe(int nEntIndex, PlayerBehavior& beha
 	DirChange changes[16];
 	int nChangeCount = 0;
 	
-	const float flMaxAge = 0.6f;  // Only look at last 0.6 seconds
+	const float flMaxAge = 1.0f;  // Look at last 1.0 seconds (increased from 0.6s for slower strafes)
 	
 	for (size_t i = 0; i + 1 < vRecords.size() && i < 20; i++)
 	{
@@ -1490,12 +1612,20 @@ void CMovementSimulation::LearnCounterStrafe(int nEntIndex, PlayerBehavior& beha
 	// =========================================================================
 	// STEP 2: Look for the counter-strafe pattern in the direction changes
 	// Pattern: DIR_A → DIR_B → DIR_A where DIR_A != DIR_B
-	// Each transition must happen within 0.25 seconds
+	// Each transition must happen within 0.45 seconds (increased from 0.25s)
+	// This catches players who strafe with ~0.35s timing
 	// =========================================================================
 	bool bCounterStrafeDetected = false;
 	int nPatternCount = 0;  // How many L-R-L or R-L-R patterns found
 	
-	const float flMaxTransitionTime = 0.25f;  // Max time between direction changes
+	// Use learned timing if available, otherwise default to 0.45s
+	// This adapts to each player's strafe speed
+	float flMaxTransitionTime = 0.45f;
+	if (behavior.m_Strafe.m_flAvgReversalTime > 0.05f && behavior.m_Strafe.m_nLeftToRightSamples > 3)
+	{
+		// Use 1.5x their average reversal time as the max (gives some slack)
+		flMaxTransitionTime = std::max(behavior.m_Strafe.m_flAvgReversalTime * 1.5f, 0.45f);
+	}
 	
 	for (int i = 0; i + 2 < nChangeCount; i++)
 	{
@@ -1661,6 +1791,40 @@ void CMovementSimulation::LearnCounterStrafe(int nEntIndex, PlayerBehavior& beha
 					behavior.m_Strafe.m_flQuadrantTime[nLastQ] * (1.0f - flWeight) + 
 					flTimeInLastQuadrant * flWeight;
 				
+				// Calculate and store the yaw rate for this quadrant
+				// Yaw rate = total yaw change during this quadrant / time in quadrant
+				// This gives us degrees per second, which we convert to degrees per tick
+				if (behavior.m_Strafe.m_vRecentYawChanges.size() >= 2)
+				{
+					// Sum up yaw changes that occurred during this quadrant
+					float flTotalYawChange = 0.0f;
+					int nYawSamples = 0;
+					for (size_t j = 0; j < behavior.m_Strafe.m_vRecentYawChanges.size() && j < 10; j++)
+					{
+						// Only count samples from this quadrant (within the time window)
+						if (behavior.m_Strafe.m_vRecentYawTimes.size() > j)
+						{
+							const float flSampleTime = behavior.m_Strafe.m_vRecentYawTimes[j];
+							if (flCurTime - flSampleTime <= flTimeInLastQuadrant + 0.05f)
+							{
+								flTotalYawChange += behavior.m_Strafe.m_vRecentYawChanges[j];
+								nYawSamples++;
+							}
+						}
+					}
+					
+					if (nYawSamples > 0)
+					{
+						// Average yaw change per sample (which is roughly per tick)
+						const float flYawPerTick = flTotalYawChange / static_cast<float>(nYawSamples);
+						
+						// Update the quadrant yaw rate with EMA
+						behavior.m_Strafe.m_flQuadrantYawRate[nLastQ] = 
+							behavior.m_Strafe.m_flQuadrantYawRate[nLastQ] * (1.0f - flWeight) + 
+							flYawPerTick * flWeight;
+					}
+				}
+				
 				behavior.m_Strafe.m_nQuadrantSamples[nLastQ]++;
 			}
 			
@@ -1708,6 +1872,25 @@ void CMovementSimulation::LearnCounterStrafe(int nEntIndex, PlayerBehavior& beha
 				
 				behavior.m_Strafe.m_flCircleStrafeYawPerTick = 
 					behavior.m_Strafe.m_flCircleStrafeYawPerTick * 0.9f + flAvgYaw * 0.1f;
+				
+				// Track variance in yaw rate (for consistency check)
+				// Low variance = consistent circle strafing = more predictable
+				float flVariance = 0.0f;
+				for (size_t i = 0; i < 5; i++)
+				{
+					const float flDiff = behavior.m_Strafe.m_vRecentYawChanges[i] - flAvgYaw;
+					flVariance += flDiff * flDiff;
+				}
+				flVariance /= 5.0f;
+				
+				// Update variance EMA
+				behavior.m_Strafe.m_flYawRateVariance = 
+					behavior.m_Strafe.m_flYawRateVariance * 0.9f + flVariance * 0.1f;
+				
+				// Store recent yaw rates for variance calculation
+				behavior.m_Strafe.m_vRecentYawRates.push_front(flAvgYaw);
+				if (behavior.m_Strafe.m_vRecentYawRates.size() > 10)
+					behavior.m_Strafe.m_vRecentYawRates.pop_back();
 			}
 		}
 	}
@@ -1941,12 +2124,13 @@ void CMovementSimulation::LearnCounterStrafeContext(C_TFPlayer* pPlayer, PlayerB
 // SHOULD PREDICT COUNTER-STRAFE
 // Returns true if we should predict this player will counter-strafe
 // 
-// Logic:
-// 1. If they're CURRENTLY doing L-R-L pattern right now → predict it
-// 2. If they have a HISTORY of counter-strafing AND just changed direction
-//    → guess they're about to reverse again
+// Simple logic:
+// 1. If they're CURRENTLY doing L-R-L pattern → YES
+// 2. If they have a HISTORY of counter-strafing (>30% rate) AND 
+//    just changed direction recently → YES (predict they'll reverse again)
+// 3. Otherwise → NO
 //
-// This prevents false positives when player is just moving left or right
+// This prevents false positives when player is just moving in one direction
 // ============================================================================
 bool CMovementSimulation::ShouldPredictCounterStrafe(int nEntIndex)
 {
@@ -1964,30 +2148,38 @@ bool CMovementSimulation::ShouldPredictCounterStrafe(int nEntIndex)
 		return true;
 	
 	// CASE 2: Has history of counter-strafing AND just changed direction
-	// This is the predictive case - we GUESS they're about to reverse
 	const int nTotalSamples = behavior.m_Strafe.m_nCounterStrafeDetections + behavior.m_Strafe.m_nNormalStrafeDetections;
 	
-	// Need enough history to make a prediction
-	if (nTotalSamples < 10)
+	// Need enough history to make a prediction (at least 6 samples)
+	if (nTotalSamples < 6)
 		return false;
 	
-	// Need high counter-strafe rate (they do it often)
-	if (behavior.m_Strafe.m_flCounterStrafeRate < 0.40f)
+	// Need at least 30% counter-strafe rate to predict
+	if (behavior.m_Strafe.m_flCounterStrafeRate < 0.30f)
 		return false;
 	
-	// Check if they JUST changed direction (within their typical reversal time)
-	// If they changed direction recently, predict they'll reverse again
+	// Check if they JUST changed direction
 	const float flCurTime = I::GlobalVars ? I::GlobalVars->curtime : 0.0f;
 	const float flTimeSinceChange = flCurTime - behavior.m_Strafe.m_flLastDirectionChangeTime;
 	
-	// Use their learned reversal time, or default to 0.2s
-	const float flExpectedReversalTime = behavior.m_Strafe.m_flAvgReversalTime > 0.05f 
-		? behavior.m_Strafe.m_flAvgReversalTime 
-		: 0.15f;
+	// If no direction change recorded, can't predict
+	if (behavior.m_Strafe.m_flLastDirectionChangeTime <= 0.0f)
+		return false;
 	
-	// If they changed direction within the last (reversal time + small buffer)
-	// then predict they're about to reverse again
-	if (flTimeSinceChange > 0.0f && flTimeSinceChange < flExpectedReversalTime + 0.1f)
+	// Use their learned reversal time, with a generous buffer
+	// Default to 0.25s if no learned data
+	float flExpectedReversalTime = 0.25f;
+	if (behavior.m_Strafe.m_flAvgReversalTime > 0.05f && 
+	    (behavior.m_Strafe.m_nLeftToRightSamples > 3 || behavior.m_Strafe.m_nRightToLeftSamples > 3))
+	{
+		flExpectedReversalTime = behavior.m_Strafe.m_flAvgReversalTime;
+	}
+	
+	// Predict if they changed direction within (reversal time * 1.5)
+	// This gives us a window to catch the pattern
+	const float flPredictionWindow = flExpectedReversalTime * 1.5f;
+	
+	if (flTimeSinceChange > 0.0f && flTimeSinceChange < flPredictionWindow)
 		return true;
 	
 	return false;

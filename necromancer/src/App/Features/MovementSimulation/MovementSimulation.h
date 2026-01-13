@@ -473,25 +473,20 @@ struct MoveStorage
 	bool m_bFailed = false;
 	bool m_bInitFailed = false;
 	
-	// Counter-strafe spam detection (A-D spam)
-	bool m_bCounterStrafeSpam = false;
+	// Counter-strafe detection (A-D spam)
+	// When detected, we simulate oscillating left-right movement
+	bool m_bCounterStrafe = false;
+	int m_nCSDirection = 1;           // Current direction: -1=left, +1=right
+	float m_flCSTimeInDir = 0.0f;     // Time spent in current direction
+	float m_flCSSwitchTime = 0.15f;   // Time until next direction switch
 	
-	// Counter-strafe simulation state
-	// When counter-strafing, we simulate the actual L-R-L pattern
-	int m_nCSCurrentDir = 0;              // Current strafe direction: -1=left, +1=right
-	float m_flCSTimeInCurrentDir = 0.0f;  // How long they've been going this direction
-	float m_flCSTimeToSwitch = 0.15f;     // When to switch direction (learned timing)
-	float m_flCSStartYaw = 0.0f;          // Yaw when counter-strafe started
-	
-	// Circle strafe simulation state
-	// When circle strafing, we simulate movement through quadrants with learned timing
-	bool m_bCircleStrafeMode = false;     // Using circle strafe simulation?
-	int m_nCircleStrafeDir = 1;           // 1=clockwise, -1=counter-clockwise
-	int m_nCurrentQuadrant = 0;           // Current quadrant: 0=fwd, 1=right, 2=back, 3=left
-	float m_flTimeInQuadrant = 0.0f;      // Time spent in current quadrant
-	float m_flQuadrantTiming[4] = {0.12f, 0.12f, 0.12f, 0.12f};  // Learned timing per quadrant
-	float m_flQuadrantYawRate[4] = {3.0f, 3.0f, 3.0f, 3.0f};     // Learned yaw rate per quadrant
-	float m_flYawPerTick = 0.0f;          // Learned yaw change per tick
+	// Circle strafe - realistic human-like strafing
+	// Humans don't strafe at a perfectly constant rate - they vary slightly
+	float m_flCircleStrafeYawVariance = 0.0f;   // How much their yaw rate varies (learned)
+	int m_nCircleStrafeQuadrant = 0;            // Current quadrant (0-3: F/R/B/L)
+	float m_flCircleStrafeTimeInQuadrant = 0.0f; // Time in current quadrant
+	float m_flCircleStrafeQuadrantTime = 0.12f;  // Expected time in this quadrant (learned)
+	float m_flCircleStrafeCurrentYaw = 0.0f;     // Current yaw rate (smoothed)
 	
 	// Cached values for RunTick performance (set in Initialize)
 	PlayerBehavior* m_pCachedBehavior = nullptr;
