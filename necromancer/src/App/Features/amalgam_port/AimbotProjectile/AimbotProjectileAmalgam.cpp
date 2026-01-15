@@ -1258,8 +1258,8 @@ bool CAmalgamAimbotProjectile::RunMain(C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 	if (F::AimbotGlobal->ShouldHoldAttack(pWeapon))
 		pCmd->buttons |= IN_ATTACK;
 	
-	// Check aimbot key
-	if (CFG::Aimbot_Key != 0 && !H::Input->IsDown(CFG::Aimbot_Key))
+	// Check aimbot key (skip if Always On is enabled)
+	if (!CFG::Aimbot_Always_On && CFG::Aimbot_Key != 0 && !H::Input->IsDown(CFG::Aimbot_Key))
 		return false;
 	
 	// Check aim type is enabled (0=Plain, 1=Silent)

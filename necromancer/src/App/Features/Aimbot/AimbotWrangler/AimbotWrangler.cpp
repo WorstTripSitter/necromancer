@@ -475,12 +475,7 @@ bool CAimbotWrangler::GetHitscanTarget(C_TFPlayer* pLocal, C_ObjectSentrygun* pS
 		return a.FOVTo < b.FOVTo;
 	});
 	
-	// Limit to max targets from config
-	const int nMaxTargets = CFG::Aimbot_Projectile_Max_Processing_Targets;
-	if (m_vecTargets.size() > static_cast<size_t>(nMaxTargets))
-		m_vecTargets.resize(nMaxTargets);
-	
-	// Return the best target (already filtered for sentry visibility)
+	// Return the single best target (already filtered for sentry visibility)
 	outTarget = m_vecTargets[0];
 	return true;
 }
@@ -590,100 +585,88 @@ bool CAimbotWrangler::GetRocketTarget(C_TFPlayer* pLocal, C_ObjectSentrygun* pSe
 		return a.FOVTo < b.FOVTo;
 	});
 	
-	// Limit to max targets from config
-	const int nMaxTargets = CFG::Aimbot_Projectile_Max_Processing_Targets;
-	if (m_vecTargets.size() > static_cast<size_t>(nMaxTargets))
-		m_vecTargets.resize(nMaxTargets);
+	// Only process the single best target (closest to crosshair/nearest)
+	// This avoids running expensive movement simulation on multiple targets
+	auto& target = m_vecTargets[0];
 	
-	// Find first target with clear rocket path (trace from sentry)
-	for (auto& target : m_vecTargets)
+	// For players, do movement prediction NOW (only for this single target)
+	Vec3 vTargetPos = target.Position;
+	float flTravelTime = 0.0f;
+	bool bIsAirborne = false;
+	
+	if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
 	{
-		// For players, do movement prediction NOW (only for this candidate)
-		Vec3 vTargetPos = target.Position;
-		float flTravelTime = 0.0f;
-		bool bIsAirborne = false;
+		auto pPlayer = target.Entity->As<C_TFPlayer>();
 		
-		if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
+		// Check if player is airborne (not on ground)
+		bIsAirborne = !(pPlayer->m_fFlags() & FL_ONGROUND);
+		
+		// Single prediction pass - calculate travel time then predict position
+		flTravelTime = GetRocketTravelTime(vRocketPos, target.Position);
+		Vec3 vPredictedPos = PredictTargetPosition(pPlayer, flTravelTime);
+		vPredictedPos.z += (pPlayer->m_vecMaxs().z - pPlayer->m_vecMins().z) * 0.5f;
+		
+		vTargetPos = vPredictedPos;
+		target.Position = vPredictedPos;
+		target.AngleTo = Math::CalcAngle(vLocalPos, vPredictedPos);
+		target.PredictedTime = flTravelTime;
+	}
+	
+	// Check if we can direct hit the target (rocket path must be clear to the target entity)
+	CGameTrace trace = {};
+	CTraceFilterHitscan filter = {};
+	filter.m_pIgnore = pSentry;
+	H::AimUtils->Trace(vRocketPos, vTargetPos, MASK_SOLID, &filter, &trace);
+	
+	bool bCanDirectHit = (trace.m_pEnt == target.Entity || trace.fraction >= 0.99f);
+	
+	// AIRBORNE TARGETS: Try direct hit first, then splash
+	if (bIsAirborne)
+	{
+		if (bCanDirectHit)
 		{
-			auto pPlayer = target.Entity->As<C_TFPlayer>();
-			
-			// Check if player is airborne (not on ground)
-			bIsAirborne = !(pPlayer->m_fFlags() & FL_ONGROUND);
-			
-			Vec3 vPredictedPos = target.Position;
-			
-			// Iterative prediction: predict position, calculate travel time, repeat
-			for (int i = 0; i < 3; i++)
-			{
-				flTravelTime = GetRocketTravelTime(vRocketPos, vPredictedPos);
-				vPredictedPos = PredictTargetPosition(pPlayer, flTravelTime);
-				vPredictedPos.z += (pPlayer->m_vecMaxs().z - pPlayer->m_vecMins().z) * 0.5f;
-			}
-			
-			vTargetPos = vPredictedPos;
-			target.Position = vPredictedPos;
-			target.AngleTo = Math::CalcAngle(vLocalPos, vPredictedPos);
-			target.PredictedTime = flTravelTime;
+			outTarget = target;
+			return true;
 		}
 		
-		// Check if we can direct hit the target (rocket path must be clear to the target entity)
-		// Use SimulateRocketPath which uses world-only filter to ensure no walls in the way
-		CGameTrace trace = {};
-		CTraceFilterHitscan filter = {};
-		filter.m_pIgnore = pSentry;
-		H::AimUtils->Trace(vRocketPos, vTargetPos, MASK_SOLID, &filter, &trace);
-		
-		bool bCanDirectHit = (trace.m_pEnt == target.Entity || trace.fraction >= 0.99f);
-		
-		// AIRBORNE TARGETS: Try direct hit first, then splash
-		if (bIsAirborne)
+		// Try splash as fallback for airborne
+		if (CFG::Aimbot_Amalgam_Projectile_Splash > 0)
 		{
-			if (bCanDirectHit)
+			Vec3 vSplashPoint;
+			if (FindSplashPoint(pLocal, pSentry, vTargetPos, target.Entity, vSplashPoint))
 			{
+				target.Position = vSplashPoint;
+				target.AngleTo = Math::CalcAngle(vLocalPos, vSplashPoint);
 				outTarget = target;
 				return true;
 			}
-			
-			// Try splash as fallback for airborne
-			if (CFG::Aimbot_Amalgam_Projectile_Splash > 0)
-			{
-				Vec3 vSplashPoint;
-				if (FindSplashPoint(pLocal, pSentry, vTargetPos, target.Entity, vSplashPoint))
-				{
-					target.Position = vSplashPoint;
-					target.AngleTo = Math::CalcAngle(vLocalPos, vSplashPoint);
-					outTarget = target;
-					return true;
-				}
-			}
-			// No valid target for this airborne enemy - try next target
 		}
-		// GROUNDED TARGETS: Try splash first, then direct hit
-		else
+		// No valid aim solution for this airborne target
+		return false;
+	}
+	
+	// GROUNDED TARGETS: Try splash first, then direct hit
+	// Try splash first for grounded targets
+	if (CFG::Aimbot_Amalgam_Projectile_Splash > 0)
+	{
+		Vec3 vSplashPoint;
+		if (FindSplashPoint(pLocal, pSentry, vTargetPos, target.Entity, vSplashPoint))
 		{
-			// Try splash first for grounded targets
-			if (CFG::Aimbot_Amalgam_Projectile_Splash > 0)
-			{
-				Vec3 vSplashPoint;
-				if (FindSplashPoint(pLocal, pSentry, vTargetPos, target.Entity, vSplashPoint))
-				{
-					target.Position = vSplashPoint;
-					target.AngleTo = Math::CalcAngle(vLocalPos, vSplashPoint);
-					outTarget = target;
-					return true;
-				}
-			}
-			
-			// Fallback to direct hit if splash failed (only if path is clear)
-			if (bCanDirectHit)
-			{
-				outTarget = target;
-				return true;
-			}
-			// No valid target for this grounded enemy - try next target
+			target.Position = vSplashPoint;
+			target.AngleTo = Math::CalcAngle(vLocalPos, vSplashPoint);
+			outTarget = target;
+			return true;
 		}
 	}
 	
+	// Fallback to direct hit if splash failed (only if path is clear)
+	if (bCanDirectHit)
+	{
+		outTarget = target;
+		return true;
+	}
+	
+	// No valid aim solution for this target
 	return false;
 }
 
@@ -743,11 +726,11 @@ void CAimbotWrangler::DrawVisualization(C_ObjectSentrygun* pSentry, const Wrangl
 		return;
 	
 	// Only draw if visualization is enabled
-	if (CFG::Visuals_Draw_Predicted_Path_Style == 0 && CFG::Visuals_Draw_Movement_Path_Style == 0)
+	if (CFG::Visuals_Draw_Predicted_Path_Style == 0)
 		return;
 	
 	const Vec3 vRocketPos = GetSentryRocketPos(pSentry);
-	constexpr float flDrawDuration = 3.0f;  // 3 seconds visibility
+	constexpr float flDrawDuration = 0.1f;  // Short duration, refreshes each frame
 	
 	// Draw rocket trajectory using projectile path style and color
 	if (CFG::Visuals_Draw_Predicted_Path_Style > 0 && bIsRocket)
@@ -793,72 +776,6 @@ void CAimbotWrangler::DrawVisualization(C_ObjectSentrygun* pSentry, const Wrangl
 		// Draw box at impact point
 		I::DebugOverlay->AddBoxOverlay(target.Position, Vec3(-4, -4, -4), Vec3(4, 4, 4), Vec3(0, 0, 0), r, g, b, 100, flDrawDuration);
 	}
-	
-	// Draw movement prediction path for players
-	if (CFG::Visuals_Draw_Movement_Path_Style > 0 && bIsRocket && target.PredictedTime > 0.0f)
-	{
-		if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
-		{
-			auto pPlayer = target.Entity->As<C_TFPlayer>();
-			if (pPlayer && F::MovementSimulation->Initialize(pPlayer))
-			{
-				std::vector<Vec3> vPath;
-				vPath.push_back(pPlayer->GetAbsOrigin());
-				
-				int nTicks = TIME_TO_TICKS(target.PredictedTime);
-				for (int i = 0; i < nTicks; i++)
-				{
-					F::MovementSimulation->RunTick();
-					vPath.push_back(F::MovementSimulation->GetOrigin());
-				}
-				F::MovementSimulation->Restore();
-				
-				const auto& col = CFG::Color_Simulation_Movement;
-				const int r = col.r, g = col.g, b = col.b;
-				
-				// Style 1: Line
-				if (CFG::Visuals_Draw_Movement_Path_Style == 1)
-				{
-					for (size_t i = 1; i < vPath.size(); i++)
-						I::DebugOverlay->AddLineOverlay(vPath[i - 1], vPath[i], r, g, b, false, flDrawDuration);
-				}
-				// Style 2: Dashed
-				else if (CFG::Visuals_Draw_Movement_Path_Style == 2)
-				{
-					for (size_t i = 1; i < vPath.size(); i++)
-					{
-						if (i % 2 == 0)
-							continue;
-						I::DebugOverlay->AddLineOverlay(vPath[i - 1], vPath[i], r, g, b, false, flDrawDuration);
-					}
-				}
-				// Style 3: With markers
-				else if (CFG::Visuals_Draw_Movement_Path_Style == 3)
-				{
-					for (size_t i = 1; i < vPath.size(); i++)
-					{
-						if (i != 1)
-						{
-							Vec3 right{};
-							Math::AngleVectors(Math::CalcAngle(vPath[i], vPath[i - 1]), nullptr, &right, nullptr);
-							const Vec3& start = vPath[i - 1];
-							I::DebugOverlay->AddLineOverlay(start, start + right * 5.0f, r, g, b, false, flDrawDuration);
-							I::DebugOverlay->AddLineOverlay(start, start - right * 5.0f, r, g, b, false, flDrawDuration);
-						}
-						I::DebugOverlay->AddLineOverlay(vPath[i - 1], vPath[i], r, g, b, false, flDrawDuration);
-					}
-				}
-				
-				// Draw box at predicted position
-				if (!vPath.empty())
-				{
-					Vec3 vPredicted = vPath.back();
-					vPredicted.z += (pPlayer->m_vecMaxs().z - pPlayer->m_vecMins().z) * 0.5f;
-					I::DebugOverlay->AddBoxOverlay(vPredicted, Vec3(-8, -8, -8), Vec3(8, 8, 8), Vec3(0, 0, 0), r, g, b, 100, flDrawDuration);
-				}
-			}
-		}
-	}
 }
 
 
@@ -875,8 +792,8 @@ void CAimbotWrangler::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pW
 	
 	G::flAimbotFOV = CFG::Aimbot_Hitscan_FOV;
 	
-	// Only run when aimbot key is pressed
-	const bool bAimKeyDown = (CFG::Aimbot_Key == 0) || H::Input->IsDown(CFG::Aimbot_Key);
+	// Only run when aimbot key is pressed (or Always On is enabled)
+	const bool bAimKeyDown = CFG::Aimbot_Always_On || (CFG::Aimbot_Key == 0) || H::Input->IsDown(CFG::Aimbot_Key);
 	if (!bAimKeyDown)
 		return;
 	

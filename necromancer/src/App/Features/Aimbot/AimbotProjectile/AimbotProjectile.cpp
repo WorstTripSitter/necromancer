@@ -1520,7 +1520,7 @@ void CAimbotProjectile::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* 
 	if (Shifting::bShifting && !Shifting::bShiftingWarp)
 		return;
 
-	if (!H::Input->IsDown(CFG::Aimbot_Key))
+	if (!CFG::Aimbot_Always_On && !H::Input->IsDown(CFG::Aimbot_Key))
 		return;
 
 	ProjTarget_t target = {};

@@ -2461,7 +2461,9 @@ void CMenu::MainWindow()
 			{
 				CheckBox("Active", CFG::Aimbot_Active);
 				CheckBox("Auto Shoot", CFG::Aimbot_AutoShoot);
-				InputKey("Key", CFG::Aimbot_Key);
+				CheckBox("Always On", CFG::Aimbot_Always_On);
+				if (!CFG::Aimbot_Always_On)
+					InputKey("Key", CFG::Aimbot_Key);
 
 				multiselect("Targets", AimbotTargets, {
 					{ "Players", CFG::Aimbot_Target_Players },

@@ -1104,7 +1104,7 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 	{
 		G::nTargetIndexEarly = target.Entity->entindex();
 
-		const auto aimKeyDown = H::Input->IsDown(CFG::Aimbot_Key);
+		const auto aimKeyDown = CFG::Aimbot_Always_On || H::Input->IsDown(CFG::Aimbot_Key);
 		if (aimKeyDown || isFiring)
 		{
 			G::nTargetIndex = target.Entity->entindex();

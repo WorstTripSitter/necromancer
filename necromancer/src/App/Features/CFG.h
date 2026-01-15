@@ -8,6 +8,7 @@ namespace CFG
 
 	CFGVAR(Aimbot_Active, false);
 	CFGVAR(Aimbot_AutoShoot, true);
+	CFGVAR(Aimbot_Always_On, false);
 	CFGVAR(Aimbot_Key, 0);
 	CFGVAR(Aimbot_Target_Players, true);
 	CFGVAR(Aimbot_Target_Buildings, true);
