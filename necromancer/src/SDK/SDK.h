@@ -40,6 +40,7 @@
 #include "TF2/c_tf_player.h"
 #include "TF2/CTFPartyClient.h"
 #include "TF2/CTFGCClientSystem.h"
+#include "TF2/glow_outline_effect.h"
 
 #include "Helpers/Draw/Draw.h"
 #include "Helpers/Entities/Entities.h"
@@ -60,6 +61,8 @@ MAKE_SIGNATURE(SharedRandomInt, "client.dll", "48 89 5C 24 ? 57 48 83 EC ? 8B FA
 MAKE_SIGNATURE(BInEndOfMatch, "client.dll", "48 83 EC ? 48 8B 05 ? ? ? ? 48 85 C0 74 ? 83 78 ? ? 75", 0x0);
 MAKE_SIGNATURE(GetClientInterpAmount, "client.dll", "40 53 48 83 EC ? 8B 05 ? ? ? ? A8 ? 75 ? 48 8B 0D ? ? ? ? 48 8D 15", 0x0);
 MAKE_SIGNATURE(LookupSequence, "client.dll", "48 89 5C 24 ? 55 48 83 EC ? 48 8B EA 48 8B D9 48 85 C9", 0x0);
+MAKE_SIGNATURE(GlowObjectManager, "client.dll", "48 8D 0D ? ? ? ? 48 8B D3 E8 ? ? ? ? B0", 0x0);
+MAKE_SIGNATURE(RenderGlowEffects, "client.dll", "48 89 6C 24 ? 48 89 74 24 ? 57 48 83 EC ? 48 8B E9 41 8B F8 48 8B 0D", 0x0);
 
 namespace SDKUtils
 {
@@ -93,6 +96,12 @@ namespace SDKUtils
 	{
 		static auto dest = Memory::RelToAbs(Signatures::RandomSeed.Get());
 		return reinterpret_cast<int*>(dest);
+	}
+
+	inline CGlowObjectManager* GetGlowObjectManager()
+	{
+		static auto dest = Memory::RelToAbs(Signatures::GlowObjectManager.Get());
+		return reinterpret_cast<CGlowObjectManager*>(dest);
 	}
 
 	inline void GetProjectileFireSetupRebuilt(C_TFPlayer *player, Vec3 offset, const Vec3 &ang_in, Vec3 &pos_out, Vec3 &ang_out, bool pipes)

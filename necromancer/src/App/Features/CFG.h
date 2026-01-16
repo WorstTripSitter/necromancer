@@ -391,7 +391,7 @@ namespace CFG
 #pragma region Outlines
 
 	CFGVAR(Outlines_Active, true);
-	CFGVAR(Outlines_Style, 1); //0 Bloom 1 Crisp 2 Cartoony 3 Cartoony Alt
+	CFGVAR(Outlines_Style, 1); //0 Bloom 1 Crisp 2 Cartoony 3 Cartoony Alt 4 TF2 Glow
 	CFGVAR(Outlines_Bloom_Amount, 1);
 
 	CFGVAR(Outlines_Players_Active, true);

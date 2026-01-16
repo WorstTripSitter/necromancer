@@ -155,7 +155,14 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, Memory::GetVFunc(I::ModelRender, 19), 
 			{
 				const auto pEntity = pClientEntity->As<C_BaseEntity>();
 
-				if (!F::Materials->IsRendering() && !F::Outlines->IsRendering() && (F::Outlines->HasDrawn(pEntity) || F::Materials->HasDrawn(pEntity)))
+				// Don't skip drawing if using TF2 native glow (it needs entities drawn normally)
+				const bool bUsingTF2Glow = CFG::Outlines_Active && CFG::Outlines_Style == 4;
+				
+				// Skip drawing the real model if:
+				// - We're not using TF2 Glow AND
+				// - We're not currently rendering Materials/Outlines AND
+				// - The entity was already drawn by Materials or Outlines
+				if (!bUsingTF2Glow && !F::Materials->IsRendering() && !F::Outlines->IsRendering() && (F::Outlines->HasDrawn(pEntity) || F::Materials->HasDrawn(pEntity)))
 					return;
 			}
 		}

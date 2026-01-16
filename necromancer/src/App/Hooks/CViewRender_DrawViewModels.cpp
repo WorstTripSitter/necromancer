@@ -2,6 +2,7 @@
 
 #include "../Features/CFG.h"
 #include "../Features/Outlines/Outlines.h"
+#include "../Features/TF2Glow/TF2Glow.h"
 #include "../Features/Paint/Paint.h"
 
 MAKE_SIGNATURE(CViewRender_DrawViewModels, "client.dll", "48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 ? 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 8B FA", 0x0);
@@ -12,8 +13,15 @@ MAKE_HOOK(CViewRender_DrawViewModels, Signatures::CViewRender_DrawViewModels.Get
 	CALL_ORIGINAL(ecx, viewRender, drawViewmodel);
 
 	// Only run Outlines::Run if outlines are actually enabled and have entities to draw
-	if (CFG::Outlines_Active && (CFG::Outlines_Players_Active || CFG::Outlines_Buildings_Active || CFG::Outlines_World_Active))
-		F::Outlines->Run();
+	if (CFG::Outlines_Active && (CFG::Outlines_Players_Active || CFG::Outlines_Buildings_Active || CFG::Outlines_World_Active) && !(CFG::Misc_Clean_Screenshot && I::EngineClient->IsTakingScreenshot()))
+	{
+		if (CFG::Outlines_Style == 4)
+		{
+			F::TF2Glow->Run(); // Register entities with glow manager (rendering happens in DoPostScreenSpaceEffects)
+		}
+		else
+			F::Outlines->Run(); // Custom outline rendering
+	}
 	
 	F::Paint->Run();
 }

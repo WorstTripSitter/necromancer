@@ -4,6 +4,7 @@
 
 #include "Features/Materials/Materials.h"
 #include "Features/Outlines/Outlines.h"
+#include "Features/TF2Glow/TF2Glow.h"
 #include "Features/WorldModulation/WorldModulation.h"
 #include "Features/Paint/Paint.h"
 #include "Features/Menu/Menu.h"
@@ -202,6 +203,7 @@ void CApp::Shutdown()
 
 		F::Materials->CleanUp();
 		F::Outlines->CleanUp();
+		F::TF2Glow->CleanUp();
 		F::Paint->CleanUp();
 
 		F::WorldModulation->RestoreWorldModulation();

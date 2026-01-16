@@ -3240,7 +3240,8 @@ void CMenu::MainWindow()
 					{ "Bloom", 0 },
 					{ "Crisp", 1 },
 					{ "Cartoony", 2 },
-					{ "Cartoony Alt", 3 }
+					{ "Cartoony Alt", 3 },
+					{ "TF2 Glow", 4 }
 				});
 
 				SliderInt("Bloom Amount", CFG::Outlines_Bloom_Amount, 1, 10, 1);

@@ -2,6 +2,7 @@
 
 #include "../Features/Materials/Materials.h"
 #include "../Features/Outlines/Outlines.h"
+#include "../Features/TF2Glow/TF2Glow.h"
 #include "../Features/WorldModulation/WorldModulation.h"
 #include "../Features/Paint/Paint.h"
 #include "../Features/SeedPred/SeedPred.h"
@@ -30,6 +31,9 @@ MAKE_HOOK(IBaseClientDLL_LevelShutdown, Memory::GetVFunc(I::BaseClientDLL, 7), v
 	
 	DebugLog("LevelShutdown: Outlines CleanUp");
 	F::Outlines->CleanUp();
+	
+	DebugLog("LevelShutdown: TF2Glow CleanUp");
+	F::TF2Glow->CleanUp();
 
 	// Wait for render thread to finish any in-progress operations
 	// This gives the render thread time to complete before we actually destroy resources
