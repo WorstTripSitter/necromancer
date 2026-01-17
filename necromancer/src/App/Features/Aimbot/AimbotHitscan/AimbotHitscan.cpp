@@ -8,7 +8,7 @@
 #include "../../Crits/Crits.h"
 #include "../../Hitchance/Hitchance.h"
 #include "../../Players/Players.h"
-#include "../../Resolver/Resolver.h"
+#include "../../amalgam_port/AmalgamCompat.h"
 #include <algorithm>
 
 // Get the predicted shoot position accounting for duck state in the command
@@ -341,40 +341,6 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 						// Preserve DT last tick avoidance when resetting end record
 						nEndRecord = bDoubletap && nRecords > 1 ? nRecords - 1 : nRecords;
 						
-						// RESOLVER SHOOT DETECTION: When scoped as sniper, prioritize the tick when enemy shot
-						// Cheaters must expose real angles to shoot, so this is the best time to hit them
-						if (CFG::Aimbot_Hitscan_Resolver && F::Resolver->ShouldUseShootRecord(pPlayer, pLocal, pWeapon))
-						{
-							const float flShootSimTime = F::Resolver->GetShootRecordSimTime(pPlayer);
-							
-							// Find the lag record closest to when they shot
-							for (int n = 1; n < nRecords; n++)
-							{
-								const auto pRecord = F::LagRecords->GetRecord(pPlayer, n, true);
-								if (!pRecord)
-									continue;
-									
-								// Check if this record matches the shoot time (within tolerance)
-								if (fabsf(pRecord->SimulationTime - flShootSimTime) < TICK_INTERVAL * 2.0f)
-								{
-									bHasValidLagRecords = true;
-									Vec3 vPos = SDKUtils::GetHitboxPosFromMatrix(pPlayer, nAimHitbox, const_cast<matrix3x4_t*>(pRecord->BoneMatrix));
-									Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
-									const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
-									const float flDistTo = vLocalPos.DistTo(vPos);
-
-									if (CFG::Aimbot_Hitscan_Sort == 0 && flFOVTo <= CFG::Aimbot_Hitscan_FOV)
-									{
-										// Add shoot record as HIGHEST priority target
-										m_vecTargets.emplace_back(AimTarget_t {
-											pPlayer, vPos, vAngleTo, flFOVTo, flDistTo
-										}, nAimHitbox, pRecord->SimulationTime, pRecord);
-									}
-									break; // Found the shoot record, stop searching
-								}
-							}
-						}
-						
 						// Prioritize the 3rd-from-last backtrack first (best balance, avoids blocking)
 						const int nPriorityRecord = nRecords - 3;
 						if (nPriorityRecord >= 1 && nPriorityRecord < nRecords)
@@ -654,23 +620,9 @@ void CAimbotHitscan::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles
 		// Silent (only set angles on the EXACT tick when firing)
 		case 1:
 		{
-			// Check if we're actually going to fire THIS tick
-			// G::Attacking is set BEFORE aimbot runs, so we need to check directly
-			// We fire when: can attack AND pressing attack (or aimbot added IN_ATTACK)
-			// Also handle reload interrupt: single-reload weapons can fire during reload if they have ammo
-			bool bWillFire = G::bCanPrimaryAttack && (pCmd->buttons & IN_ATTACK);
-			
-			// Reload interrupt case: attacking during reload with single-reload weapon that has ammo
-			if (!bWillFire && (pCmd->buttons & IN_ATTACK))
-			{
-				const auto pWeapon = H::Entities->GetWeapon();
-				if (pWeapon && pWeapon->IsInReload() && pWeapon->m_bReloadsSingly() && pWeapon->m_iClip1() > 0)
-				{
-					bWillFire = true;
-				}
-			}
-			
-			if (bWillFire)
+			// Match Amalgam's approach: check G::Attacking == 1
+			// G::Attacking is updated in Run() BEFORE Aim() is called
+			if (G::Attacking == 1)
 			{
 				H::AimUtils->FixMovement(pCmd, vAngleTo);
 				pCmd->viewangles = vAngleTo;
@@ -722,22 +674,6 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 {
 	if (!CFG::Aimbot_AutoShoot)
 		return false;
-
-	// Smart Shotgun Damage Prediction - CHECK FIRST before hitchance
-	// This ensures RapidFire won't start if smart shotgun would block the shot
-	if (CFG::Aimbot_Hitscan_Smart_Shotgun && target.Entity && target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
-	{
-		const int wid = pWeapon->GetWeaponID();
-		const bool bIsShotgun = (
-			wid == TF_WEAPON_SCATTERGUN ||
-			wid == TF_WEAPON_SODA_POPPER ||
-			wid == TF_WEAPON_PEP_BRAWLER_BLASTER ||
-			wid == TF_WEAPON_SHOTGUN_PRIMARY ||
-			wid == TF_WEAPON_SHOTGUN_SOLDIER ||
-			wid == TF_WEAPON_SHOTGUN_HWG ||
-			wid == TF_WEAPON_SHOTGUN_PYRO
-		);
-	}
 
 	// Hitchance check - calculate if we meet the required hit probability
 	// NOTE: Minigun uses tapfire delay system instead of hitchance blocking
@@ -1159,12 +1095,6 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 			if (bShouldFire)
 			{
 				HandleFire(pCmd, pWeapon);
-				
-				// Track resolver shot for auto-resolve on miss
-				if (CFG::Aimbot_Hitscan_Resolver && target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
-				{
-					F::Resolver->HitscanRan(pLocal, target.Entity->As<C_TFPlayer>(), pWeapon, target.AimedHitbox);
-				}
 			}
 			else
 			{
@@ -1174,7 +1104,11 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 					pCmd->buttons &= ~IN_ATTACK;
 			}
 
-			const bool bIsFiring = IsFiring(pCmd, pWeapon);
+			// Update G::Attacking BEFORE calling Aim (like Amalgam does)
+			// This ensures Aim() can check G::Attacking == 1 to know if we're firing
+			G::Attacking = SDK::IsAttacking(pLocal, pWeapon, pCmd, true);
+			
+			const bool bIsFiring = G::Attacking == 1;
 			G::bFiring = bIsFiring;
 
 			// Are we ready to aim?

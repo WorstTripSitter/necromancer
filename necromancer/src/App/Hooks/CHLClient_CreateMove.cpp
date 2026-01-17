@@ -18,7 +18,6 @@
 #include "../Features/Misc/AntiCheatCompat/AntiCheatCompat.h"
 #include "../Features/amalgam_port/AmalgamCompat.h"
 #include "../Features/amalgam_port/Ticks/Ticks.h"
-#include "../Features/Resolver/Resolver.h"
 #include "../Features/Players/Players.h"
 
 // Taunt delay processing - defined in IVEngineClient013_ClientCmd.cpp
@@ -386,7 +385,6 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 		// This ensures projectile aimbot uses the correct predicted eye position
 		F::AmalgamTicks->SaveShootPos(pLocal);
 		
-		F::Resolver->CreateMove(pLocal); // Update resolver (auto-resolve on miss)
 		F::Misc->AutoMedigun(pCmd);
 		F::Aimbot->Run(pCmd);
 

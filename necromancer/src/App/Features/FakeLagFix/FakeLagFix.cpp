@@ -1,5 +1,6 @@
 #include "FakeLagFix.h"
 #include "../CFG.h"
+#include "../Misc/AntiCheatCompat/AntiCheatCompat.h"
 
 bool CFakeLagFix::ShouldShoot(C_TFPlayer* pTarget)
 {
@@ -44,13 +45,29 @@ bool CFakeLagFix::ShouldShoot(C_TFPlayer* pTarget)
 		// Only shoot if they were actually choking (unchoke event)
 		// nChokedTicks >= FAKELAG_CHOKE_THRESHOLD means they choked multiple ticks
 		// OR if they weren't choking, allow shooting (normal case)
-		return nChokedTicks >= FAKELAG_CHOKE_THRESHOLD || nTicksSinceUpdate < FAKELAG_CHOKE_THRESHOLD;
+		const bool bShouldShoot = nChokedTicks >= FAKELAG_CHOKE_THRESHOLD || nTicksSinceUpdate < FAKELAG_CHOKE_THRESHOLD;
+		
+		// Notify AntiCheatCompat that we're allowing a shot after blocking
+		// This clears the angle history to prevent false psilent detections
+		if (bShouldShoot && CFG::Misc_AntiCheat_Enabled)
+		{
+			F::AntiCheatCompat->OnFakeLagFixAllowed();
+		}
+		
+		return bShouldShoot;
 	}
 	else
 	{
 		// Simtime didn't change - they're choking or idle
 		// Increment ticks since last update
 		m_mTicksSinceUpdate[nEntIndex]++;
+		
+		// Notify AntiCheatCompat that we're blocking a shot
+		// This prevents angle history from building up incorrectly
+		if (CFG::Misc_AntiCheat_Enabled)
+		{
+			F::AntiCheatCompat->OnFakeLagFixBlocked();
+		}
 		
 		// Don't shoot while waiting for unchoke
 		return false;

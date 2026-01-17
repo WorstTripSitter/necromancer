@@ -8,7 +8,6 @@
 #include "../Features/Crits/Crits.h"
 #include "../Features/Weather/Weather.h"
 #include "../Features/amalgam_port/AmalgamCompat.h"
-#include "../Features/Resolver/Resolver.h"
 
 MAKE_HOOK(IBaseClientDLL_FrameStageNotify, Memory::GetVFunc(I::BaseClientDLL, 35), void, __fastcall,
 	void* ecx, ClientFrameStage_t curStage)
@@ -82,38 +81,15 @@ MAKE_HOOK(IBaseClientDLL_FrameStageNotify, Memory::GetVFunc(I::BaseClientDLL, 35
 				if (nDifference > 0)
 				{
 					// Do manual animation updates if Disable Interp is on
-					// Apply resolver angles during animation updates (like Amalgam does)
 					if (bDoAnimUpdates)
 					{
 						const float flOldFrameTime = I::GlobalVars->frametime;
 						I::GlobalVars->frametime = flAnimFrameTime;
 
-						// Check if resolver should modify this player's angles
-						float flResolvedYaw, flResolvedPitch;
-						const bool bUseResolver = CFG::Aimbot_Hitscan_Resolver && 
-							F::Resolver->GetAngles(pPlayer, &flResolvedYaw, &flResolvedPitch, nullptr);
-
 						G::bUpdatingAnims = true;
 						for (int n = 0; n < nDifference; n++)
 						{
-							if (bUseResolver)
-							{
-								// Temporarily set resolved angles before animation update
-								const float flOriginalYaw = pPlayer->m_angEyeAnglesY();
-								const float flOriginalPitch = pPlayer->m_angEyeAnglesX();
-								
-								pPlayer->m_angEyeAnglesY() = flResolvedYaw;
-								pPlayer->m_angEyeAnglesX() = flResolvedPitch;
-								pPlayer->UpdateClientSideAnimation();
-								
-								// Restore original angles
-								pPlayer->m_angEyeAnglesY() = flOriginalYaw;
-								pPlayer->m_angEyeAnglesX() = flOriginalPitch;
-							}
-							else
-							{
-								pPlayer->UpdateClientSideAnimation();
-							}
+							pPlayer->UpdateClientSideAnimation();
 						}
 						G::bUpdatingAnims = false;
 
@@ -130,7 +106,6 @@ MAKE_HOOK(IBaseClientDLL_FrameStageNotify, Memory::GetVFunc(I::BaseClientDLL, 35
 			}
 
 			F::LagRecords->UpdateDatagram();
-			F::Resolver->FrameStageNotify(); // Update resolver data BEFORE UpdateRecords
 			F::LagRecords->UpdateRecords();
 			F::MovementSimulation->Store(); // Store movement records for strafe prediction
 

@@ -399,7 +399,6 @@
     <ClCompile Include="src\App\Features\ProjectileSim\ProjectileSim.cpp" />
     <ClCompile Include="src\App\Features\Radar\Radar.cpp" />
     <ClCompile Include="src\App\Features\RapidFire\RapidFire.cpp" />
-    <ClCompile Include="src\App\Features\Resolver\Resolver.cpp" />
     <ClCompile Include="src\App\Features\SeedPred\SeedPred.cpp" />
     <ClCompile Include="src\App\Features\SpectatorList\SpectatorList.cpp" />
     <ClCompile Include="src\App\Features\SpyCamera\SpyCamera.cpp" />

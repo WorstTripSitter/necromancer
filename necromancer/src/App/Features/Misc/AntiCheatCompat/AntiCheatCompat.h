@@ -36,6 +36,13 @@ public:
 	
 	// Reset the modified flag (call at start of CreateMove)
 	void ResetModifiedFlag() { m_bModifiedAngles = false; }
+	
+	// FakeLagFix compatibility - call when FakeLagFix blocks a shot
+	// This clears the angle history so we don't get false psilent detections
+	void OnFakeLagFixBlocked();
+	
+	// Call when FakeLagFix allows shooting - resets history for clean start
+	void OnFakeLagFixAllowed();
 
 	// Tracked sent values
 	float m_flSentInterp = -1.f;
@@ -46,6 +53,7 @@ private:
 	std::deque<CmdHistory_t> m_vHistory;
 	int m_iBhopCount = 0;
 	bool m_bModifiedAngles = false;  // True if we modified angles this tick
+	bool m_bFakeLagFixBlocking = false;  // True if FakeLagFix is currently blocking shots
 
 	// Detection thresholds - exact values from Amalgam
 	static constexpr float MATH_EPSILON = 1.f / 16.f;

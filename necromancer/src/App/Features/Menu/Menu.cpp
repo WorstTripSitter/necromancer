@@ -2522,9 +2522,7 @@ void CMenu::MainWindow()
 				CheckBox("Wait For Headshot", CFG::Aimbot_Hitscan_Wait_For_Headshot);
 				CheckBox("Wait For Charge", CFG::Aimbot_Hitscan_Wait_For_Charge);
 				CheckBox("Minigun Tapfire", CFG::Aimbot_Hitscan_Minigun_TapFire);
-				CheckBox("Smart Shotgun (Beta)", CFG::Aimbot_Hitscan_Smart_Shotgun);
 				CheckBox("FakeLag Fix", CFG::Aimbot_Hitscan_FakeLagFix);
-				CheckBox("Resolver", CFG::Aimbot_Hitscan_Resolver);
 
 				// Track previous aim type to backup/restore FOV when switching to/from triggerbot
 				static int nPrevAimType = CFG::Aimbot_Hitscan_Aim_Type;

@@ -9,6 +9,25 @@ static bool g_bDebugAntiCheat = false;
 static bool g_bOriginalNeckbreaker = false;
 static bool g_bSavedOriginals = false;
 
+void CAntiCheatCompat::OnFakeLagFixBlocked()
+{
+	// When FakeLagFix blocks a shot, mark that we're in blocking state
+	// This prevents false psilent detections from angle changes while waiting
+	m_bFakeLagFixBlocking = true;
+}
+
+void CAntiCheatCompat::OnFakeLagFixAllowed()
+{
+	// When FakeLagFix allows shooting, clear history for a clean start
+	// This prevents the angle history from containing pre-block angles
+	// that would cause false psilent detection
+	if (m_bFakeLagFixBlocking)
+	{
+		m_vHistory.clear();
+		m_bFakeLagFixBlocking = false;
+	}
+}
+
 void CAntiCheatCompat::ProcessCommand(CUserCmd* pCmd, bool* pSendPacket)
 {
 	// Reset modified flag at start

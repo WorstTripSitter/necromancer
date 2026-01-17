@@ -4,7 +4,6 @@
 
 #include "../CFG.h"
 #include "../Misc/AntiCheatCompat/AntiCheatCompat.h"
-#include "../Resolver/Resolver.h"
 
 bool CLagRecords::IsSimulationTimeValid(float flCurSimTime, float flCmprSimTime)
 {
@@ -81,30 +80,7 @@ void CLagRecords::AddRecord(C_TFPlayer* pPlayer)
 	if (bSetupBonesOpt)
 		pPlayer->InvalidateBoneCache();
 
-	// Apply resolver angles before setting up bones (like Amalgam does)
-	float flOriginalYaw = pPlayer->m_angEyeAnglesY();
-	float flOriginalPitch = pPlayer->m_angEyeAnglesX();
-	bool bResolverApplied = false;
-	
-	if (CFG::Aimbot_Hitscan_Resolver)
-	{
-		float flResolvedYaw, flResolvedPitch;
-		if (F::Resolver->GetAngles(pPlayer, &flResolvedYaw, &flResolvedPitch, nullptr))
-		{
-			pPlayer->m_angEyeAnglesY() = flResolvedYaw;
-			pPlayer->m_angEyeAnglesX() = flResolvedPitch;
-			bResolverApplied = true;
-		}
-	}
-
 	const bool bResult = pPlayer->SetupBones(newRecord.BoneMatrix, 128, BONE_USED_BY_ANYTHING, I::GlobalVars->curtime);
-
-	// Restore original angles
-	if (bResolverApplied)
-	{
-		pPlayer->m_angEyeAnglesY() = flOriginalYaw;
-		pPlayer->m_angEyeAnglesX() = flOriginalPitch;
-	}
 
 	if (bSetupBonesOpt)
 	{
@@ -402,23 +378,4 @@ float CLagRecords::GetFakeLatency() const
 	// Only GetFakeInterp() is clamped in Amalgam. The fake latency system works by manipulating
 	// sequence numbers, which is separate from the interp system that sends cl_interp to server.
 	return m_flFakeLatency;
-}
-
-
-// Resolver support - when resolver angles change, we need to rebuild records
-// with the new resolver angles immediately
-void CLagRecords::ResolverUpdate(C_TFPlayer* pPlayer)
-{
-	if (!pPlayer)
-		return;
-		
-	// Clear all cached records for this player
-	if (m_LagRecords.contains(pPlayer))
-	{
-		m_LagRecords[pPlayer].clear();
-	}
-	
-	// Immediately create a new record with the updated resolver angles
-	// This ensures we have a valid target even if the enemy isn't moving
-	AddRecord(pPlayer);
 }
