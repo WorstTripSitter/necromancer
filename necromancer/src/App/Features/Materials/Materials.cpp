@@ -125,6 +125,25 @@ void CMaterials::Initialize()
 {
 	static ConVar* mat_hdr_level = I::CVar->FindVar("mat_hdr_level");
 
+	// ==================================================================
+	// AUTO-RECOVERY: Detect if materials became error materials after
+	// alt-tab, resolution change, HDR toggle, or engine render state loss.
+	// If so, null the pointer so it gets recreated below.
+	// Cost: ~1 bool read per material per frame (nanoseconds)
+	// ==================================================================
+	if (m_pFlat && m_pFlat->IsErrorMaterial()) m_pFlat = nullptr;
+	if (m_pShaded && m_pShaded->IsErrorMaterial()) m_pShaded = nullptr;
+	if (m_pGlossy && m_pGlossy->IsErrorMaterial()) m_pGlossy = nullptr;
+	if (m_pGlow && m_pGlow->IsErrorMaterial())
+	{
+		m_pGlow = nullptr;
+		m_pGlowEnvmapTint = nullptr;
+		m_pGlowSelfillumTint = nullptr;
+	}
+	if (m_pPlastic && m_pPlastic->IsErrorMaterial()) m_pPlastic = nullptr;
+	if (m_pFlatNoInvis && m_pFlatNoInvis->IsErrorMaterial()) m_pFlatNoInvis = nullptr;
+	if (m_pShadedNoInvis && m_pShadedNoInvis->IsErrorMaterial()) m_pShadedNoInvis = nullptr;
+
 	if (!m_pFlat)
 	{
 		auto* kv = new KeyValues("VertexLitGeneric");

@@ -37,6 +37,10 @@ void CAimbot::RunMain(CUserCmd* pCmd)
 	const auto pLocal = H::Entities->GetLocal();
 	const auto pWeapon = H::Entities->GetWeapon();
 
+	// Cache for reuse in Run() - avoids duplicate virtual calls
+	m_pCachedLocal = pLocal;
+	m_pCachedWeapon = pWeapon;
+
 	if (!pLocal || !pWeapon
 		|| pLocal->deadflag()
 		|| pLocal->InCond(TF_COND_TAUNTING) || pLocal->InCond(TF_COND_PHASE)
@@ -92,10 +96,9 @@ void CAimbot::Run(CUserCmd* pCmd)
 {
 	RunMain(pCmd);
 
-	//same-ish code below to see if we are firing manually
-
-	const auto pLocal = H::Entities->GetLocal();
-	const auto pWeapon = H::Entities->GetWeapon();
+	// Reuse cached values from RunMain() instead of re-fetching
+	const auto pLocal = m_pCachedLocal;
+	const auto pWeapon = m_pCachedWeapon;
 
 	if (!pLocal || !pWeapon
 		|| pLocal->deadflag()

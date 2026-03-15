@@ -28,15 +28,17 @@ C_TFWeaponBase* CEntityHelper::GetWeapon()
 
 bool CEntityHelper::IsF2P(int nPlayerIndex)
 {
-	if (m_mapPlayerInfo.contains(nPlayerIndex))
-		return m_mapPlayerInfo[nPlayerIndex].bIsF2P;
+	auto it = m_mapPlayerInfo.find(nPlayerIndex);
+	if (it != m_mapPlayerInfo.end())
+		return it->second.bIsF2P;
 	return false;
 }
 
 int CEntityHelper::GetPartyIndex(int nPlayerIndex)
 {
-	if (m_mapPlayerInfo.contains(nPlayerIndex))
-		return m_mapPlayerInfo[nPlayerIndex].nPartyIndex;
+	auto it = m_mapPlayerInfo.find(nPlayerIndex);
+	if (it != m_mapPlayerInfo.end())
+		return it->second.nPartyIndex;
 	return 0;
 }
 
@@ -196,19 +198,14 @@ void CEntityHelper::UpdatePlayerInfoFromGC()
 		if (g_setCheckedPlayersForInfo.count(uAccountID) > 0)
 		{
 			// Player already checked, but update their slot mapping in case they changed slots
-			if (!m_mapPlayerInfo.contains(n))
+			if (m_mapPlayerInfo.find(n) == m_mapPlayerInfo.end())
 			{
-				// Find their cached info by account ID and copy to new slot
-				for (auto& [slot, cache] : m_mapPlayerInfo)
-				{
-					// We need to store account ID in cache to do this properly
-					// For now, just re-fetch if slot changed
-				}
-				
 				// Re-add to cache for this slot
 				PlayerInfoCache cache;
-				cache.bIsF2P = mapAccountToF2P.contains(uAccountID) ? mapAccountToF2P[uAccountID] : false;
-				cache.nPartyIndex = mapAccountToPartyIndex.contains(uAccountID) ? mapAccountToPartyIndex[uAccountID] : 0;
+				auto itF2P = mapAccountToF2P.find(uAccountID);
+				cache.bIsF2P = (itF2P != mapAccountToF2P.end()) ? itF2P->second : false;
+				auto itParty = mapAccountToPartyIndex.find(uAccountID);
+				cache.nPartyIndex = (itParty != mapAccountToPartyIndex.end()) ? itParty->second : 0;
 				m_mapPlayerInfo[n] = cache;
 			}
 			continue;
@@ -219,8 +216,10 @@ void CEntityHelper::UpdatePlayerInfoFromGC()
 
 		// Store player info
 		PlayerInfoCache cache;
-		cache.bIsF2P = mapAccountToF2P.contains(uAccountID) ? mapAccountToF2P[uAccountID] : false;
-		cache.nPartyIndex = mapAccountToPartyIndex.contains(uAccountID) ? mapAccountToPartyIndex[uAccountID] : 0;
+		auto itF2P = mapAccountToF2P.find(uAccountID);
+		cache.bIsF2P = (itF2P != mapAccountToF2P.end()) ? itF2P->second : false;
+		auto itParty = mapAccountToPartyIndex.find(uAccountID);
+		cache.nPartyIndex = (itParty != mapAccountToPartyIndex.end()) ? itParty->second : 0;
 		m_mapPlayerInfo[n] = cache;
 	}
 }

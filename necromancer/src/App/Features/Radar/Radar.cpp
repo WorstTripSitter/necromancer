@@ -71,10 +71,8 @@ void CRadar::Drag()
 	}
 }
 
-bool CRadar::GetDrawPosition(int& x, int& y, const Vec3& vWorld)
+bool CRadar::GetDrawPosition(int& x, int& y, const Vec3& vWorld, C_TFPlayer* pLocal)
 {
-	const auto pLocal = H::Entities->GetLocal();
-
 	if (!pLocal)
 		return false;
 
@@ -276,7 +274,7 @@ void CRadar::Run()
 
 				int x = 0, y = 0;
 
-				if (!GetDrawPosition(x, y, pEntity->GetCenter()))
+				if (!GetDrawPosition(x, y, pEntity->GetCenter(), pLocal))
 					continue;
 
 				H::Draw->Texture(x, y, nIconSize, nIconSize, F::VisualUtils->GetHealthIconTextureId(), POS_CENTERXY);
@@ -292,7 +290,7 @@ void CRadar::Run()
 
 				int x = 0, y = 0;
 
-				if (!GetDrawPosition(x, y, pEntity->GetCenter()))
+				if (!GetDrawPosition(x, y, pEntity->GetCenter(), pLocal))
 					continue;
 
 				H::Draw->Texture(x, y, nIconSize, nIconSize, F::VisualUtils->GetAmmoIconTextureId(), POS_CENTERXY);
@@ -317,7 +315,7 @@ void CRadar::Run()
 
 				int x = 0, y = 0;
 
-				if (!GetDrawPosition(x, y, pEntity->GetCenter()))
+				if (!GetDrawPosition(x, y, pEntity->GetCenter(), pLocal))
 					continue;
 
 				H::Draw->Texture(x, y, static_cast<int>(36.0f * s), static_cast<int>(40.0f * s), F::VisualUtils->GetHalloweenGiftTextureId(), POS_CENTERXY);
@@ -371,7 +369,7 @@ void CRadar::Run()
 
 			int x = 0, y = 0;
 
-			if (!GetDrawPosition(x, y, pBuilding->GetCenter()))
+			if (!GetDrawPosition(x, y, pBuilding->GetCenter(), pLocal))
 				continue;
 
 			Color_t entColor = F::VisualUtils->GetEntityColor(pLocal, pBuilding);
@@ -438,7 +436,7 @@ void CRadar::Run()
 
 			int x = 0, y = 0;
 
-			if (!GetDrawPosition(x, y, pPlayer->GetCenter()))
+			if (!GetDrawPosition(x, y, pPlayer->GetCenter(), pLocal))
 				continue;
 
 			Color_t entColor = F::VisualUtils->GetEntityColor(pLocal, pPlayer);
@@ -460,7 +458,7 @@ void CRadar::Run()
 
 			int x = 0, y = 0;
 
-			if (!GetDrawPosition(x, y, pEntity->GetCenter()))
+			if (!GetDrawPosition(x, y, pEntity->GetCenter(), pLocal))
 				continue;
 
 			H::Draw->String(H::Fonts->Get(EFonts::ESP_SMALL), x, y, CFG::Color_MVM_Money, POS_CENTERXY, "$");

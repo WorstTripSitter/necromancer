@@ -5,7 +5,7 @@
 class CRadar
 {
 	void Drag();
-	bool GetDrawPosition(int& x, int& y, const Vec3& vWorld);
+	bool GetDrawPosition(int& x, int& y, const Vec3& vWorld, C_TFPlayer* pLocal);
 
 public:
 	void Run();

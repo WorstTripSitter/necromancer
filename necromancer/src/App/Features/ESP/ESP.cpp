@@ -134,7 +134,6 @@ bool CESP::GetDrawBounds(C_BaseEntity* pEntity, int& x, int& y, int& w, int& h)
 	if (H::Draw->W2S(vTransformed[3], flb) && H::Draw->W2S(vTransformed[5], brt)
 		&& H::Draw->W2S(vTransformed[0], blb) && H::Draw->W2S(vTransformed[4], frt)
 		&& H::Draw->W2S(vTransformed[2], frb) && H::Draw->W2S(vTransformed[1], brb)
-		&& H::Draw->W2S(vTransformed[6], blt) && H::Draw->W2S(vTransformed[7], flt)
 		&& H::Draw->W2S(vTransformed[6], blt) && H::Draw->W2S(vTransformed[7], flt))
 	{
 		const Vec3 arr[] = {flb, brt, blb, frt, frb, brb, blt, flt};
@@ -840,6 +839,12 @@ void CESP::Run()
 	{
 		I::MatSystemSurface->DrawSetAlphaMultiplier(CFG::ESP_Buildings_Alpha);
 
+		// Cache font references ONCE - avoid repeated H::Fonts->Get() calls inside entity loop
+		const auto& bldFontSmall = H::Fonts->Get(EFonts::ESP_SMALL);
+		const auto& bldFontConds = H::Fonts->Get(EFonts::ESP_CONDS);
+		const int nBldFontSmallTall = bldFontSmall.m_nTall;
+		const int nBldFontCondsTall = bldFontConds.m_nTall;
+
 		for (const auto pEntity : H::Entities->GetGroup(EEntGroup::BUILDINGS_ALL))
 		{
 			if (!pEntity)
@@ -915,9 +920,9 @@ void CESP::Run()
 			if (CFG::ESP_Buildings_Name)
 			{
 				H::Draw->String(
-					H::Fonts->Get(EFonts::ESP_SMALL),
+					bldFontSmall,
 					x + (w / 2),
-					(y - (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall - 1)) - SPACING_Y,
+					(y - (nBldFontSmallTall - 1)) - SPACING_Y,
 					textColor,
 					POS_CENTERX,
 					GetBuildingName(pBuilding)
@@ -927,9 +932,9 @@ void CESP::Run()
 			if (CFG::ESP_Buildings_Health)
 			{
 				H::Draw->String(
-					H::Fonts->Get(EFonts::ESP_SMALL),
+					bldFontSmall,
 					x + w + SPACING_X,
-					y + (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall * nTextOffsetY++),
+					y + (nBldFontSmallTall * nTextOffsetY++),
 					healthColor,
 					POS_DEFAULT,
 					"%d",
@@ -959,9 +964,9 @@ void CESP::Run()
 			if (CFG::ESP_Buildings_Level)
 			{
 				H::Draw->String(
-					H::Fonts->Get(EFonts::ESP_SMALL),
+					bldFontSmall,
 					x + w + SPACING_X,
-					y + (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall * nTextOffsetY++),
+					y + (nBldFontSmallTall * nTextOffsetY++),
 					textColor,
 					POS_DEFAULT,
 					"%d",
@@ -995,35 +1000,35 @@ void CESP::Run()
 					nTextOffsetY += 1;
 
 				int drawX = x + w + SPACING_X;
-				int tall = H::Fonts->Get(EFonts::ESP_CONDS).m_nTall;
+				int tall = nBldFontCondsTall;
 
 				Color_t color = CFG::Color_Conds;
 
 				if (pBuilding->m_bBuilding())
 				{
-					H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "BUILDING");
+					H::Draw->String(bldFontConds, drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "BUILDING");
 				}
 
 				else
 				{
 					if (pBuilding->GetClassId() == ETFClassIds::CObjectSentrygun && pBuilding->As<C_ObjectSentrygun>()->m_iAmmoShells() == 0)
-						H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "NOSHELLS");
+						H::Draw->String(bldFontConds, drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "NOSHELLS");
 
 					if (!pBuilding->m_bMiniBuilding())
 					{
 						if (pBuilding->GetClassId() == ETFClassIds::CObjectSentrygun && pBuilding->As<C_ObjectSentrygun>()->m_iAmmoRockets() == 0)
 						{
 							if (pBuilding->m_iUpgradeLevel() == 3)
-								H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "NOROCKETS");
+								H::Draw->String(bldFontConds, drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "NOROCKETS");
 						}
 					}
 				}
 
 				if (pBuilding->IsDisabled())
-					H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "DISABLED");
+					H::Draw->String(bldFontConds, drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "DISABLED");
 
 				if (pBuilding->GetClassId() == ETFClassIds::CObjectSentrygun && pBuilding->As<C_ObjectSentrygun>()->m_bShielded())
-					H::Draw->String(H::Fonts->Get(EFonts::ESP_CONDS), drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "WRANGLED");
+					H::Draw->String(bldFontConds, drawX, y + (tall * nTextOffsetY++), color, POS_DEFAULT, "WRANGLED");
 			}
 		}
 	}
@@ -1031,6 +1036,9 @@ void CESP::Run()
 	if (CFG::ESP_World_Active)
 	{
 		I::MatSystemSurface->DrawSetAlphaMultiplier(CFG::ESP_World_Alpha);
+
+		// Cache font reference ONCE for world ESP section
+		const auto& worldFontSmall = H::Fonts->Get(EFonts::ESP_SMALL);
 
 		int x = 0, y = 0, w = 0, h = 0;
 
@@ -1074,9 +1082,9 @@ void CESP::Run()
 				if (CFG::ESP_World_Name)
 				{
 					H::Draw->String(
-						H::Fonts->Get(EFonts::ESP_SMALL),
+						worldFontSmall,
 						x + (w / 2),
-						(y - (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall - 1)) - SPACING_Y,
+						(y - (worldFontSmall.m_nTall - 1)) - SPACING_Y,
 						textColor,
 						POS_CENTERX,
 						"health"
@@ -1131,9 +1139,9 @@ void CESP::Run()
 				if (CFG::ESP_World_Name)
 				{
 					H::Draw->String(
-						H::Fonts->Get(EFonts::ESP_SMALL),
+						worldFontSmall,
 						x + (w / 2),
-						(y - (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall - 1)) - SPACING_Y,
+						(y - (worldFontSmall.m_nTall - 1)) - SPACING_Y,
 						textColor,
 						POS_CENTERX,
 						"ammo"
@@ -1209,9 +1217,9 @@ void CESP::Run()
 				if (CFG::ESP_World_Name)
 				{
 					H::Draw->String(
-						H::Fonts->Get(EFonts::ESP_SMALL),
+						worldFontSmall,
 						x + (w / 2),
-						(y - (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall - 1)) - SPACING_Y,
+						(y - (worldFontSmall.m_nTall - 1)) - SPACING_Y,
 						textColor,
 						POS_CENTERX,
 						GetProjectileName(pEntity)
@@ -1266,9 +1274,9 @@ void CESP::Run()
 				if (CFG::ESP_World_Name)
 				{
 					H::Draw->String(
-						H::Fonts->Get(EFonts::ESP_SMALL),
+						worldFontSmall,
 						x + (w / 2),
-						(y - (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall - 1)) - SPACING_Y,
+						(y - (worldFontSmall.m_nTall - 1)) - SPACING_Y,
 						textColor,
 						POS_CENTERX,
 						"halloween gift"
@@ -1323,9 +1331,9 @@ void CESP::Run()
 				if (CFG::ESP_World_Name)
 				{
 					H::Draw->String(
-						H::Fonts->Get(EFonts::ESP_SMALL),
+						worldFontSmall,
 						x + (w / 2),
-						(y - (H::Fonts->Get(EFonts::ESP_SMALL).m_nTall - 1)) - SPACING_Y,
+						(y - (worldFontSmall.m_nTall - 1)) - SPACING_Y,
 						textColor,
 						POS_CENTERX,
 						"money"

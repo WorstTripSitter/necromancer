@@ -1071,6 +1071,7 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 				pCmd->buttons |= IN_ATTACK;
 
 			// Spin up minigun
+			bool bMinigunAimbotAddedAttack = false;
 			if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
 			{
 				const int nState = pWeapon->As<C_TFMinigun>()->m_iWeaponState();
@@ -1083,10 +1084,14 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 				// For minigun, add IN_ATTACK when in firing/spinning state
 				// The tapfire check in ShouldFire will remove it if needed based on distance
 				// This also ensures G::LastUserCmd has IN_ATTACK for the crithack
+				// Track if WE added IN_ATTACK (not the user)
 				if (nState == AC_STATE_FIRING || nState == AC_STATE_SPINNING)
 				{
-					if (pWeapon->HasPrimaryAmmoForShot())
+					if (pWeapon->HasPrimaryAmmoForShot() && !(pCmd->buttons & IN_ATTACK))
+					{
 						pCmd->buttons |= IN_ATTACK;
+						bMinigunAimbotAddedAttack = true;
+					}
 				}
 			}
 
@@ -1098,9 +1103,9 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 			}
 			else
 			{
-				// If ShouldFire returned false for minigun, remove IN_ATTACK but keep revved
-				// This ensures the minigun stays spun up while waiting for tapfire delay
-				if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+				// If ShouldFire returned false for minigun, only remove IN_ATTACK if the aimbot added it
+				// This allows the user to manually fire even when aimbot is waiting for tapfire delay
+				if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN && bMinigunAimbotAddedAttack)
 					pCmd->buttons &= ~IN_ATTACK;
 			}
 

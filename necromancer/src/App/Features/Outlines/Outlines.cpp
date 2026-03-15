@@ -10,6 +10,33 @@
 
 void COutlines::Initialize()
 {
+	// ==================================================================
+	// AUTO-RECOVERY: Detect if materials/textures became invalid after
+	// alt-tab, resolution change, or engine render state loss.
+	// Null invalid pointers so they get recreated below.
+	// ==================================================================
+	if (m_pMatGlowColor && m_pMatGlowColor->IsErrorMaterial())
+		m_pMatGlowColor = nullptr;
+	if (m_pMatHaloAddToScreen && m_pMatHaloAddToScreen->IsErrorMaterial())
+		m_pMatHaloAddToScreen = nullptr;
+	if (m_pMatBlurX && m_pMatBlurX->IsErrorMaterial())
+		m_pMatBlurX = nullptr;
+	if (m_pMatBlurY && m_pMatBlurY->IsErrorMaterial())
+	{
+		m_pMatBlurY = nullptr;
+		m_pBloomAmount = nullptr;
+	}
+	if (m_pRenderBuffer0 && m_pRenderBuffer0->IsError())
+	{
+		m_pRenderBuffer0->DecrementReferenceCount();
+		m_pRenderBuffer0 = nullptr;
+	}
+	if (m_pRenderBuffer1 && m_pRenderBuffer1->IsError())
+	{
+		m_pRenderBuffer1->DecrementReferenceCount();
+		m_pRenderBuffer1 = nullptr;
+	}
+
 	if (!m_pMatGlowColor)
 	{
 		m_pMatGlowColor = I::MaterialSystem->FindMaterial("dev/glow_color", TEXTURE_GROUP_OTHER);
@@ -567,10 +594,12 @@ void COutlines::Run()
 
 	case 2:
 		{
+			// Fixed: was drawing (-2,-1) and (2,1) twice each (copy-paste bug)
+			// Now uses 4 unique diagonal offsets for proper cartoony outline
 			pRC->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -2, -1, w, h, 0.0f, 0.0f, w - 1, h - 1, w, h);
 			pRC->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 2, 1, w, h, 0.0f, 0.0f, w - 1, h - 1, w, h);
-			pRC->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -2, -1, w, h, 0.0f, 0.0f, w - 1, h - 1, w, h);
-			pRC->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 2, 1, w, h, 0.0f, 0.0f, w - 1, h - 1, w, h);
+			pRC->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, -1, 2, w, h, 0.0f, 0.0f, w - 1, h - 1, w, h);
+			pRC->DrawScreenSpaceRectangle(m_pMatHaloAddToScreen, 1, -2, w, h, 0.0f, 0.0f, w - 1, h - 1, w, h);
 			break;
 		}
 

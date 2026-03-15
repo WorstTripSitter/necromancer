@@ -19,7 +19,6 @@
 #include <chrono>
 #include <filesystem>
 #include <deque>
-#include <regex>
 
 namespace Utils
 {
@@ -39,10 +38,11 @@ namespace Utils
 		return result;
     }
 
+    // Uses a static generator to avoid creating a new random_device + mt19937 per call
+    // The old version queried OS entropy every invocation which is extremely slow
     static int RandInt(int min, int max)
     {
-        std::random_device rd;
-        std::mt19937 gen(rd());
+        static thread_local std::mt19937 gen{ std::random_device{}() };
         std::uniform_int_distribution<> distr(min, max);
         return distr(gen);
     }

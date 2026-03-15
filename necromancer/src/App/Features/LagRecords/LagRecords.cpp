@@ -131,11 +131,14 @@ const LagRecord_t* CLagRecords::GetRecord(C_TFPlayer* pPlayer, int nRecord, bool
 {
 	if (!bSafe)
 	{
-		if (!m_LagRecords.contains(pPlayer))
+		auto it = m_LagRecords.find(pPlayer);
+		if (it == m_LagRecords.end())
 			return nullptr;
 
-		if (nRecord < 0 || nRecord > static_cast<int>(m_LagRecords[pPlayer].size() - 1))
+		if (nRecord < 0 || nRecord > static_cast<int>(it->second.size() - 1))
 			return nullptr;
+
+		return &it->second[nRecord];
 	}
 
 	return &m_LagRecords[pPlayer][nRecord];
@@ -143,9 +146,10 @@ const LagRecord_t* CLagRecords::GetRecord(C_TFPlayer* pPlayer, int nRecord, bool
 
 bool CLagRecords::HasRecords(C_TFPlayer* pPlayer, int* pTotalRecords)
 {
-	if (m_LagRecords.contains(pPlayer))
+	auto it = m_LagRecords.find(pPlayer);
+	if (it != m_LagRecords.end())
 	{
-		const size_t nSize = m_LagRecords[pPlayer].size();
+		const size_t nSize = it->second.size();
 
 		if (nSize <= 0)
 			return false;
@@ -260,7 +264,7 @@ void CLagRecordMatrixHelper::Restore()
 		m_pPlayer = nullptr;
 		m_vAbsOrigin = {};
 		m_vAbsAngles = {};
-		std::memset(m_BoneMatrix, 0, sizeof(matrix3x4_t) * 128);
+		// No need to zero m_BoneMatrix - it's fully overwritten in Set()
 		m_bSuccessfullyStored = false;
 		return;
 	}
@@ -274,7 +278,7 @@ void CLagRecordMatrixHelper::Restore()
 	m_pPlayer = nullptr;
 	m_vAbsOrigin = {};
 	m_vAbsAngles = {};
-	std::memset(m_BoneMatrix, 0, sizeof(matrix3x4_t) * 128);
+	// No need to zero m_BoneMatrix - it's fully overwritten in Set()
 	m_bSuccessfullyStored = false;
 }
 

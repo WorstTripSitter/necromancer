@@ -121,7 +121,7 @@ MAKE_HOOK(CGameEventManager_FireEventIntern, Signatures::CGameEventManager_FireE
 			}
 		}
 
-		if (HASH_RT(event->GetName()) == player_connect_client && bClientOnly && CFG::Visuals_Chat_Player_List_Info)
+		if (uHash == player_connect_client && bClientOnly && CFG::Visuals_Chat_Player_List_Info)
 		{
 			PlayerPriority pi{};
 
@@ -148,7 +148,7 @@ MAKE_HOOK(CGameEventManager_FireEventIntern, Signatures::CGameEventManager_FireE
 
 		if (const auto pLocal = H::Entities->GetLocal())
 		{
-			if (CFG::Misc_MVM_Instant_Revive && HASH_RT(event->GetName()) == revive_player_notify)
+			if (CFG::Misc_MVM_Instant_Revive && uHash == revive_player_notify)
 			{
 				if (event->GetInt("entindex") == pLocal->entindex())
 				{

@@ -11,7 +11,7 @@ class COutlines
 
 	void Initialize();
 
-	std::map<C_BaseEntity*, bool> m_mapDrawnEntities = {};
+	std::unordered_map<C_BaseEntity*, bool> m_mapDrawnEntities = {};
 	bool m_bRendering = false;
 	bool m_bRenderingOutlines = false;
 	bool m_bCleaningUp = false;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <algorithm>
-#include <map>
+#include <unordered_map>
 #include <vector>
 
 #include "TF2/IMatSystemSurface.h"
@@ -353,7 +353,7 @@ namespace G
 		float m_flSimulationTime = 0.0f;
 	};
 
-	inline std::map<C_BasePlayer *, VelFixRecord_t> mapVelFixRecords = {};
+	inline std::unordered_map<C_BasePlayer *, VelFixRecord_t> mapVelFixRecords = {};
 
 	inline bool bFiring = false;
 	inline int nTicksTargetSame = 0;
