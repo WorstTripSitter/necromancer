@@ -8,6 +8,7 @@
 #include "../Features/Crits/Crits.h"
 #include "../Features/Weather/Weather.h"
 #include "../Features/amalgam_port/AmalgamCompat.h"
+#include "../Features/NavBot/NavBot.h"
 #include "../../Utils/CrashHandler/CrashHandler.h"
 
 // Convar backup system: file-scope so RestoreConvarBackups() can access it.
@@ -157,6 +158,7 @@ MAKE_HOOK(IBaseClientDLL_FrameStageNotify, Memory::GetVFunc(I::BaseClientDLL, 35
 	if (G::bRejoinOnKickPending)
 	{
 		G::bRejoinOnKickPending = false;
+		g_NavBot.ResetAutoJoinTimers();  // Reset so auto-join fires immediately after reconnect
 		I::EngineClient->ClientCmd_Unrestricted("retry");
 	}
 

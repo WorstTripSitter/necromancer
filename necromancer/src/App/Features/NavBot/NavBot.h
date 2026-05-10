@@ -137,6 +137,7 @@ private:
 	void AutoJoinTeam(C_TFPlayer* pLocal);
 	float m_flNextAutoJoinTeamTime = 0.0f;
 	float m_flNextAutoJoinClassTime = 0.0f;
+	int m_iLastRandomTeamAttempt = 0;  // Track which team random mode tried last (1=Blue, 2=Red)
 
 	// === Auto Scope (ported from Amalgam's BotUtils::AutoScope) ===
 	void AutoScope(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd);
@@ -147,6 +148,14 @@ private:
 	bool m_bAutoScopeWasScopedLastTick = false;  // Were we scoped last tick?
 
 public:
+	// Reset auto-join timers on level change/reconnect
+	void ResetAutoJoinTimers();
+
+	// Check if a destination is reachable from local player's position
+	// Step 1: Quick check - is there a nav area at/under the destination? If not, skip immediately.
+	// Step 2: Full check - is there a connected path from local to destination through nav areas?
+	bool IsReachable(C_TFPlayer* pLocal, const Vec3& vDestination);
+
 	// Main update function - call every tick when Active is enabled
 	void Run(C_TFPlayer* pLocal, CUserCmd* pCmd);
 

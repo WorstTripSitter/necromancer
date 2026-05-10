@@ -6,6 +6,7 @@
 #include "../Features/MiscVisuals/MiscVisuals.h"
 #include "../Features/ChatESP/ChatESP.h"
 #include "../Features/NavBot/NavEngine/NavEngine.h"
+#include "../Features/NavBot/NavBot.h"
 
 MAKE_HOOK(IBaseClientDLL_LevelInitPostEntity, Memory::GetVFunc(I::BaseClientDLL, 6), void, __fastcall,
 	void* ecx)
@@ -29,6 +30,9 @@ MAKE_HOOK(IBaseClientDLL_LevelInitPostEntity, Memory::GetVFunc(I::BaseClientDLL,
 
 	// Reset NavEngine on map change (reloads nav mesh for new map)
 	G_NavEngine.Reset(true);
+
+	// Reset NavBot auto-join timers so they don't carry stale values from previous session
+	g_NavBot.ResetAutoJoinTimers();  // Reset so auto-join fires immediately after reconnect
 
 	if (CFG::Visuals_Chat_Player_List_Info)
 	{

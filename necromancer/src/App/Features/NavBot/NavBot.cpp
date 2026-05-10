@@ -1406,7 +1406,7 @@ void CNavBot::Run(C_TFPlayer* pLocal, CUserCmd* pCmd)
 				}
 			}
 		}
-		else if (FindSupply(pLocal, vSupplyPos, bNeedHealth))
+		else if (FindSupply(pLocal, vSupplyPos, bNeedHealth) && IsReachable(pLocal, vSupplyPos))
 		{
 			m_bIsGettingSupply = true;
 			m_vTargetPos = vSupplyPos;
@@ -1495,7 +1495,7 @@ void CNavBot::Run(C_TFPlayer* pLocal, CUserCmd* pCmd)
 				}
 			}
 		}
-		else if (FindSupply(pLocal, vSupplyPos, true))
+		else if (FindSupply(pLocal, vSupplyPos, true) && IsReachable(pLocal, vSupplyPos))
 		{
 			m_vTargetPos = vSupplyPos;
 			bHasObjective = true;
@@ -1524,8 +1524,8 @@ void CNavBot::Run(C_TFPlayer* pLocal, CUserCmd* pCmd)
 		Vec3 vObjectivePos;
 		if (FindObjective(pLocal, vObjectivePos))
 		{
-			// Validate objective position (not zero)
-			if (!vObjectivePos.IsZero())
+			// Validate objective position (not zero) and reachable via navmesh
+			if (!vObjectivePos.IsZero() && IsReachable(pLocal, vObjectivePos))
 			{
 				m_vTargetPos = vObjectivePos;
 				bHasObjective = true;
@@ -1616,7 +1616,7 @@ void CNavBot::Run(C_TFPlayer* pLocal, CUserCmd* pCmd)
 				}
 			}
 		}
-		else if (FindSupply(pLocal, vSupplyPos, false))
+		else if (FindSupply(pLocal, vSupplyPos, false) && IsReachable(pLocal, vSupplyPos))
 		{
 			m_vTargetPos = vSupplyPos;
 			bHasObjective = true;
@@ -2013,7 +2013,9 @@ bool CNavBot::SniperSpot(C_TFPlayer* pLocal)
 		if (G_NavEngine.IsPathing() && G_NavEngine.m_eCurrentPriority >= NAV_PRIO_PATROL)
 			return true;
 
-		// Lost our path — re-path
+		// Lost our path — re-path (only if still reachable)
+		if (!IsReachable(pLocal, m_vSniperSpotPos))
+			return false;
 		G_NavEngine.NavTo(m_vSniperSpotPos, NAV_PRIO_PATROL);
 		return true;
 	}
@@ -2041,6 +2043,8 @@ bool CNavBot::SniperSpot(C_TFPlayer* pLocal)
 	m_flSniperPatienceEnd = flCurTime + 10.0f;
 
 	m_vTargetPos = vSpot;
+	if (!IsReachable(pLocal, vSpot))
+		return false;
 	G_NavEngine.NavTo(vSpot, NAV_PRIO_PATROL);
 	return true;
 }
@@ -2180,12 +2184,16 @@ bool CNavBot::StayNear(C_TFPlayer* pLocal)
 			float flDistFromDest = G_NavEngine.GetDestination().DistTo(vTargetPos);
 			if (flDistFromDest > 200.0f)
 			{
+				if (!IsReachable(pLocal, vTargetPos))
+					return false;
 				G_NavEngine.NavTo(vTargetPos, NAV_PRIO_STAYNEAR);
 				m_flNextRepathTime = flCurTime + 0.5f;
 			}
 		}
 		else if (!G_NavEngine.IsPathing())
 		{
+			if (!IsReachable(pLocal, vTargetPos))
+				return false;
 			G_NavEngine.NavTo(vTargetPos, NAV_PRIO_STAYNEAR);
 			m_flNextRepathTime = flCurTime + 0.5f;
 		}
@@ -2209,6 +2217,9 @@ bool CNavBot::StayNear(C_TFPlayer* pLocal)
 	m_iStayNearTargetIdx = iBestIdx;
 	m_pTargetEntity = pBestTarget;
 	m_vTargetPos = vTargetPos;
+
+	if (!IsReachable(pLocal, vTargetPos))
+		return false;
 
 	if (!G_NavEngine.IsPathing() || flCurTime >= m_flNextRepathTime)
 	{
@@ -3164,13 +3175,21 @@ void CNavBot::AutoJoinTeam(C_TFPlayer* pLocal)
 	int iCurrentTeam = 0;
 	if (pLocal->IsInValidTeam(&iCurrentTeam))
 	{
-		// Already on a valid team - check if it matches desired team
-		if (iDesiredTeam != 3)  // Not spectator
+		// Already on a valid team (Red or Blue) - check if it matches desired team
+		if (iDesiredTeam == 4)  // Random — any valid team is fine
+		{
+			m_iLastRandomTeamAttempt = 0;  // Reset random tracking when on valid team
+			return;  // Already on a team, no need to rejoin
+		}
+		else if (iDesiredTeam != 3)  // Not spectator
 		{
 			// Map CFG values to TF team values: 1=Blue(TF_TEAM_BLUE=3), 2=Red(TF_TEAM_RED=2)
 			int iDesiredTFTeam = (iDesiredTeam == 1) ? 3 : 2;  // Blue=3, Red=2
 			if (iCurrentTeam == iDesiredTFTeam)
+			{
+				m_iLastRandomTeamAttempt = 0;  // Reset random tracking when on valid team
 				return;  // Already on the correct team
+			}
 		}
 		else if (iCurrentTeam == 1)  // TF_TEAM_SPECTATOR = 1
 			return;  // Already spectator
@@ -3189,14 +3208,77 @@ void CNavBot::AutoJoinTeam(C_TFPlayer* pLocal)
 	case 3:  // Spectator
 		I::EngineClient->ClientCmd_Unrestricted("jointeam spectator");
 		break;
-	case 4:  // Random (Red or Blue only, never spectator)
+	case 4:  // Random (Red or Blue only, never spectator) — alternate if first attempt fails
 	{
-		int iTeam = (std::rand() % 2 == 0) ? 1 : 2;  // 1=Blue, 2=Red
+		// If we tried a team last time and still aren't on a team, try the other one
+		int iTeam = 0;
+		if (m_iLastRandomTeamAttempt == 1)
+			iTeam = 2;  // Tried Blue last, try Red
+		else if (m_iLastRandomTeamAttempt == 2)
+			iTeam = 1;  // Tried Red last, try Blue
+		else
+			iTeam = (std::rand() % 2 == 0) ? 1 : 2;  // First attempt: pick randomly
+
+		m_iLastRandomTeamAttempt = iTeam;
 		I::EngineClient->ClientCmd_Unrestricted(iTeam == 1 ? "jointeam blue" : "jointeam red");
 		break;
 	}
 	}
 	I::EngineClient->ClientCmd_Unrestricted("menuclosed");
+}
+
+bool CNavBot::IsReachable(C_TFPlayer* pLocal, const Vec3& vDestination)
+{
+	if (!pLocal || !G_NavEngine.IsNavMeshLoaded())
+		return false;
+
+	auto pMap = G_NavEngine.m_pMap.get();
+	if (!pMap || pMap->m_eState != NavState::Active)
+		return false;
+
+	// === Step 1: Quick check - is there a nav area at/under the destination? ===
+	// If the destination isn't on any nav area, there's no way to walk there.
+	// This is a cheap O(1) check that eliminates most invalid destinations.
+	CNavArea* pDestArea = pMap->FindClosestNavArea(vDestination);
+	if (!pDestArea)
+		return false;
+
+	// FindClosestNavArea can return a fallback area that's just the closest center,
+	// but the destination itself might not actually be on any nav area.
+	// Verify the destination is overlapping its closest nav area.
+	bool bDestOverlapping = pDestArea->IsOverlapping(vDestination) &&
+	                       vDestination.z >= pDestArea->m_flMinZ && vDestination.z <= pDestArea->m_flMaxZ + 100.0f;
+	if (!bDestOverlapping)
+		return false;
+
+	// === Step 2: Full check - is there a connected path from local to destination? ===
+	// This runs A* pathfinding to verify all nav areas along the route are valid.
+	Vec3 vLocalPos = pLocal->m_vecOrigin();
+	CNavArea* pLocalArea = pMap->FindClosestNavArea(vLocalPos);
+	if (!pLocalArea)
+		return false;
+
+	// Same-area case: local and destination are on the same nav area
+	if (pLocalArea == pDestArea)
+		return true;
+
+	// Run A* pathfinding to verify connectivity
+	int iResult = 0;
+	std::vector<void*> vPath = pMap->FindPath(pLocalArea, pDestArea, &iResult);
+
+	// Empty path with START_END_SAME means same area (already handled above)
+	// Empty path with no result means no path exists
+	if (vPath.empty() && iResult != micropather::MicroPather::START_END_SAME)
+		return false;
+
+	return true;
+}
+
+void CNavBot::ResetAutoJoinTimers()
+{
+	m_flNextAutoJoinTeamTime = 0.0f;
+	m_flNextAutoJoinClassTime = 0.0f;
+	m_iLastRandomTeamAttempt = 0;
 }
 
 // === Auto Join Class (ported from Amalgam's AutoJoin) ===
