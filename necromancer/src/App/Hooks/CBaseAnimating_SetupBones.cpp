@@ -38,8 +38,8 @@ C_BaseEntity* GetRootMoveParent(C_BaseEntity* baseEnt)
 MAKE_HOOK(CBaseAnimating_SetupBones, Signatures::CBaseAnimating_SetupBones.Get(), bool, __fastcall,
 	C_BaseAnimating* ecx, matrix3x4_t* pBoneToWorldOut, int nMaxBones, int boneMask, float currentTime)
 {
-	// Safety check - skip custom logic during level transitions or invalid entity
-	if (G::bLevelTransition || !ecx)
+	// Safety check - skip custom logic during level transitions, invalid entity, or while not fully in game
+	if (G::bLevelTransition || !ecx || !I::EngineClient->IsInGame())
 		return CALL_ORIGINAL(ecx, pBoneToWorldOut, nMaxBones, boneMask, currentTime);
 
 	// Use cached bones if Disable Interp is on - choppy but accurate for aimbot
@@ -90,7 +90,7 @@ MAKE_HOOK(CBaseAnimating_SetupBones, Signatures::CBaseAnimating_SetupBones.Get()
 						return CALL_ORIGINAL(ecx, pBoneToWorldOut, nMaxBones, boneMask, currentTime);
 
 					const auto bones = pAnimating->GetCachedBoneData();
-					
+
 					// Validate bone cache is valid and has data
 					if (bones && bones->Count() > 0 && bones->Base())
 					{
@@ -102,7 +102,7 @@ MAKE_HOOK(CBaseAnimating_SetupBones, Signatures::CBaseAnimating_SetupBones.Get()
 						}
 					}
 				}
-				
+
 				// If we couldn't use cached bones, fall through to original
 			}
 		}

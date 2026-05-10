@@ -11,6 +11,7 @@
 #include "Features/Players/Players.h"
 #include "Features/Weather/Weather.h"
 #include "CheaterDatabase/CheaterDatabase.h"
+#include "../Utils/CrashHandler/CrashHandler.h"
 
 #include "Features/CFG.h"
 
@@ -50,7 +51,7 @@ static void CaptureOriginalGameSettings()
 void CApp::Start()
 {
 	// Initialize crash handler first to catch any crashes during initialization
-	CrashHandler->Initialize();
+	F::CrashHandler->Initialize();
 
 	while (!Memory::FindSignature("client.dll", "48 8B 0D ? ? ? ? 48 8B 10 48 8B 19 48 8B C8 FF 92"))
 	{
@@ -64,6 +65,28 @@ void CApp::Start()
 	U::Storage->Init("Necromancer");
 	U::SignatureManager->InitializeAllSignatures();
 	U::InterfaceManager->InitializeAllInterfaces();
+
+	// Validate critical interfaces - abort gracefully instead of crashing on null dereference
+	{
+		const char* missingInterfaces = nullptr;
+		if (!I::EngineClient)     missingInterfaces = "IVEngineClient (engine.dll)";
+		else if (!I::BaseClientDLL) missingInterfaces = "IBaseClientDLL (client.dll)";
+		else if (!I::CVar)        missingInterfaces = "ICvar (vstdlib.dll)";
+		else if (!I::ClientEntityList) missingInterfaces = "IClientEntityList (client.dll)";
+		else if (!I::MatSystemSurface) missingInterfaces = "IMatSystemSurface (vguimatsurface.dll)";
+		else if (!I::MaterialSystem)  missingInterfaces = "IMaterialSystem (materialsystem.dll)";
+
+		if (missingInterfaces)
+		{
+			MessageBoxA(nullptr,
+				std::format("Failed to initialize critical interface: {}\n\n"
+					"Make sure you are injected into the TF2 process.\n"
+					"Press OK to unload.", missingInterfaces).c_str(),
+				"Necromancer - Critical Error", MB_OK | MB_ICONERROR);
+			bUnload = true;
+			return;
+		}
+	}
 	
 	// Initialize TFPartyClient (for auto-queue feature)
 	// The signature points to a function that loads a global pointer via RIP-relative addressing
@@ -195,6 +218,27 @@ void CApp::Shutdown()
 		CFG::Visuals_Weather = 0;
 		F::Weather->Rain();
 
+		// Disable all EXTREME performance options so FrameStageNotify
+		// restores user's original convar values before we free hooks
+		CFG::Perf_Extreme_Skip_All_Visuals = false;
+		CFG::Perf_Extreme_Skip_LagRecords_Teammates = false;
+		CFG::Perf_Extreme_Skip_Anim_Updates = false;
+		CFG::Perf_Extreme_Skip_MovementSimulation = false;
+		CFG::Perf_Extreme_Skip_VelFix = false;
+		CFG::Perf_Extreme_Skip_Outlines = false;
+		CFG::Perf_Extreme_Skip_ESP = false;
+		CFG::Perf_Extreme_Limit_Entity_Cache = false;
+		CFG::Perf_Extreme_Skip_World_Render = false;
+		CFG::Perf_Extreme_Skip_Shadows = false;
+		CFG::Perf_Extreme_Skip_Particles = false;
+		CFG::Perf_Extreme_Skip_Decals = false;
+		CFG::Perf_Extreme_Skip_World_Textures = false;
+		CFG::Perf_Extreme_Skip_Unused_Entities = false;
+		CFG::Perf_Extreme_Skip_Sound = false;
+		CFG::Perf_Extreme_Low_Textures = false;
+		CFG::Perf_Extreme_Minimal_Render = false;
+		CFG::Perf_Extreme_FPS_Limit = 0;
+
 		U::HookManager->FreeAllHooks();
 
 		Hooks::WINAPI_WndProc::Release();
@@ -207,6 +251,13 @@ void CApp::Shutdown()
 		F::Paint->CleanUp();
 
 		F::WorldModulation->RestoreWorldModulation();
+
+		// Restore convars to user's original values (not engine defaults!)
+		// This uses the backup system from FrameStageNotify which captured
+		// the user's actual settings before we modified them.
+		extern void RestoreConvarBackups();
+		if (I::CVar)
+			RestoreConvarBackups();
 
 		if (const auto cl_wpn_sway_interp{ I::CVar->FindVar("cl_wpn_sway_interp") })
 		{
@@ -222,5 +273,5 @@ void CApp::Shutdown()
 	I::CVar->ConsoleColorPrintf({ 255, 70, 70, 255 }, "[Necromancer] Unloaded, enjoy being a retarded legit!\n");
 
 	// Shutdown crash handler last
-	CrashHandler->Shutdown();
+	F::CrashHandler->Shutdown();
 }

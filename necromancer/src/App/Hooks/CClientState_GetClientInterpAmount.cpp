@@ -11,7 +11,9 @@ MAKE_HOOK(CClientState_GetClientInterpAmount, Signatures::CClientState_GetClient
 	G::Lerp = CALL_ORIGINAL(rcx);
 	
 	// If auto interp is enabled, return 0 for game calculations
-	if (CFG::Visuals_Auto_Interp)
+	// BUT NOT during connection — returning 0 lerp during signon breaks the
+	// connection handshake (server and client disagree on timing)
+	if (CFG::Visuals_Auto_Interp && I::EngineClient->IsInGame())
 		return 0.f;
 	
 	return G::Lerp;

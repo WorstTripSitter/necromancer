@@ -19,30 +19,13 @@ public:
     // Save the current shoot position (call in CreateMove)
     // Accounts for CrouchWhileAirborne - if IN_DUCK is set while airborne,
     // the actual shoot position will be lower even if FL_DUCKING isn't set yet
-    void SaveShootPos(C_TFPlayer* pLocal, CUserCmd* pCmd = nullptr)
+    void SaveShootPos(C_TFPlayer* pLocal, const CUserCmd* pCmd = nullptr)
     {
         if (!pLocal || !pLocal->IsAlive())
             return;
             
-        m_vShootPos = pLocal->GetShootPos();
-        
-        // Account for CrouchWhileAirborne feature
-        // When airborne, ducking is instant - if IN_DUCK is set but FL_DUCKING isn't,
-        // the actual shoot position when firing will be at duck height
-        // TF2 view heights: standing = 68, ducking = 45, difference = 23 units
-        if (pCmd || G::CurrentUserCmd)
-        {
-            CUserCmd* cmd = pCmd ? pCmd : G::CurrentUserCmd;
-            const bool bCurrentlyDucking = (pLocal->m_fFlags() & FL_DUCKING) != 0;
-            const bool bWantsToDuck = (cmd->buttons & IN_DUCK) != 0;
-            const bool bOnGround = (pLocal->m_fFlags() & FL_ONGROUND) != 0;
-            
-            if (bWantsToDuck && !bCurrentlyDucking && !bOnGround)
-            {
-                // Adjust to duck view height (68 -> 45 = -23 units)
-                m_vShootPos.z -= 23.0f * pLocal->m_flModelScale();
-            }
-        }
+        // Use centralized duck prediction (handles CrouchWhileAirborne)
+        m_vShootPos = SDK::GetPredictedShootPos(pLocal, pCmd);
     }
 
     // Get the saved shoot position

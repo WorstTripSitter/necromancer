@@ -56,6 +56,30 @@ public:
 		return GetPing(playerindex) == 0;
 	}
 
+	uint32_t GetAccountID(int playerindex)
+	{
+		static int nOffset = NetVars::GetNetVar("CPlayerResource", "m_iAccountID");
+		if (nOffset == 0) return 0;
+		return *reinterpret_cast<uint32_t*>((reinterpret_cast<std::uintptr_t>(this) + nOffset) + (playerindex * sizeof(uint32_t)));
+	}
+
+	// Get player name from player resource (m_szName array)
+	// m_szName is at offset -816 from m_iPing (each entry is 24 bytes)
+	// Using same approach as amalgam's NETVAR_ARRAY_OFF
+	const char* GetName(int playerindex)
+	{
+		static int nPingOffset = NetVars::GetNetVar("CPlayerResource", "m_iPing");
+		if (nPingOffset == 0) return PLAYER_ERROR_NAME;
+		
+		// m_szName is at ping offset - 816 bytes
+		int nNameOffset = nPingOffset - 816;
+		if (nNameOffset <= 0) return PLAYER_ERROR_NAME;
+		
+		// Each entry in m_szName array is 24 bytes
+		const char* pName = *reinterpret_cast<const char**>(reinterpret_cast<std::uintptr_t>(this) + nNameOffset + (playerindex * 24));
+		return pName ? pName : PLAYER_ERROR_NAME;
+	}
+
 //public:
 //	virtual ~C_PlayerResource();
 //	virtual int GetTeamScore(int index);

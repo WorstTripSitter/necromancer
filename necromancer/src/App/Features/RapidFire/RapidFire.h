@@ -12,7 +12,12 @@ class CRapidFire
 
 	Vec3 m_vShiftStart = {};
 	bool m_bStartedShiftOnGround = false;
-	
+
+	// Antiwarp: captured velocity at shift start, tick counter for phase calculation
+	Vec3 m_vShiftVelocity = {};
+	int m_nShiftTick = 0;
+	int m_nShiftTotal = 0;
+
 	bool m_bStickyCharging = false;
 
 	bool ShouldStart(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon);

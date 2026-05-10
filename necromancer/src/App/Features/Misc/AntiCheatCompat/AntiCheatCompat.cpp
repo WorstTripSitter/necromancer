@@ -2,9 +2,6 @@
 #include "../../CFG.h"
 #include "../Misc.h"
 
-// Debug flag - set to true to enable console output
-static bool g_bDebugAntiCheat = false;
-
 // Store original values to restore when anti-cheat is disabled
 static bool g_bOriginalNeckbreaker = false;
 static bool g_bSavedOriginals = false;
@@ -87,12 +84,7 @@ void CAntiCheatCompat::ProcessCommand(CUserCmd* pCmd, bool* pSendPacket)
 				pCmd->viewangles = m_vHistory[0].m_vAngle + Vec3(0.f, REAL_EPSILON * 2, 0.f);
 			m_vHistory[0].m_vAngle = pCmd->viewangles;
 			m_vHistory[0].m_bSendingPacket = *pSendPacket = m_vHistory[1].m_bSendingPacket;
-			m_bModifiedAngles = true;  // Mark that we modified angles
-
-			if (g_bDebugAntiCheat)
-			{
-				I::CVar->ConsoleColorPrintf(Color_t(255, 100, 100, 255), "[AC-DEBUG] PSILENT DETECTED - LERPING\n");
-			}
+			m_bModifiedAngles = true;
 		}
 
 		// Prevent aim snap checks
@@ -113,12 +105,7 @@ void CAntiCheatCompat::ProcessCommand(CUserCmd* pCmd, bool* pSendPacket)
 				pCmd->viewangles.y += SNAP_NOISE_EPSILON * 2;
 				m_vHistory[0].m_vAngle = pCmd->viewangles;
 				m_vHistory[0].m_bSendingPacket = *pSendPacket = m_vHistory[1].m_bSendingPacket;
-				m_bModifiedAngles = true;  // Mark that we modified angles
-
-				if (g_bDebugAntiCheat)
-				{
-					I::CVar->ConsoleColorPrintf(Color_t(255, 100, 100, 255), "[AC-DEBUG] SNAP DETECTED - ADDING NOISE\n");
-				}
+				m_bModifiedAngles = true;  
 			}
 		}
 	}

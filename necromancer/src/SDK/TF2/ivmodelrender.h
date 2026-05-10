@@ -55,6 +55,10 @@ struct StaticPropRenderInfo_t
 class IVModelRender
 {
 public:
+	// Function pointer type matching DrawModelExecute virtual — used for direct calls
+	// (Amalgam-style lag record rendering)
+	typedef void(__fastcall* DrawModelExecuteFn)(IVModelRender*, const DrawModelState_t&, ModelRenderInfo_t&, matrix3x4_t*);
+
 	virtual int	DrawModel(int flags,
 		IClientRenderable *pRenderable,
 		ModelInstanceHandle_t instance,

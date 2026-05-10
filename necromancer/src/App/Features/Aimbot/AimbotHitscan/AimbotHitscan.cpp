@@ -8,29 +8,17 @@
 #include "../../Crits/Crits.h"
 #include "../../Hitchance/Hitchance.h"
 #include "../../Players/Players.h"
+#include "../../../../Utils/CrashHandler/CrashHandler.h"
 #include "../../amalgam_port/AmalgamCompat.h"
 #include <algorithm>
 
 // Get the predicted shoot position accounting for duck state in the command
 // This is critical for CrouchWhileAirborne - the command may have IN_DUCK set
 // but the entity's current state doesn't reflect that yet
+// Uses the centralized SDK::GetPredictedShootPos for correct Source SDK duck math
 static Vec3 GetPredictedShootPos(C_TFPlayer* pLocal, const CUserCmd* pCmd)
 {
-	Vec3 vShootPos = pLocal->GetShootPos();
-	
-	const bool bCurrentlyDucking = (pLocal->m_fFlags() & FL_DUCKING) != 0;
-	const bool bWantsToDuck = (pCmd->buttons & IN_DUCK) != 0;
-	const bool bOnGround = (pLocal->m_fFlags() & FL_ONGROUND) != 0;
-	
-	// When airborne, ducking is instant (no transition time)
-	// If CrouchWhileAirborne set IN_DUCK but FL_DUCKING isn't set yet, we need to predict
-	// TF2 view heights: standing = 68, ducking = 45, difference = 23 units
-	if (bWantsToDuck && !bCurrentlyDucking && !bOnGround)
-	{
-		vShootPos.z -= 10.0f;
-	}
-	
-	return vShootPos;
+	return SDK::GetPredictedShootPos(pLocal, pCmd);
 }
 
 // Check if weapon is a sniper rifle or ambassador (can headshot)
@@ -290,6 +278,20 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 			if (CFG::Aimbot_Ignore_Taunting && pPlayer->InCond(TF_COND_TAUNTING))
 				continue;
 
+			// Vaccinator popped: ignore if bullet resist uber, unless enemy is low HP
+			// Minigun: shoot at 80 HP or less (high ROF can finish them)
+			// Other hitscan: shoot at 30 HP or less (one shot could kill)
+			// Weapons with mod_pierce_resists_absorbs bypass this entirely
+			if (CFG::Aimbot_Ignore_Vaccinator && pPlayer->InCond(TF_COND_MEDIGUN_UBER_BULLET_RESIST))
+			{
+				if (SDKUtils::AttribHookValue(0.0f, "mod_pierce_resists_absorbs", pWeapon) == 0.0f)
+				{
+					const int nHPThreshold = (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN) ? 80 : 30;
+					if (pPlayer->m_iHealth() > nHPThreshold)
+						continue;
+				}
+			}
+
 			// Ignore untagged players when key is held
 			if (CFG::Aimbot_Ignore_Untagged_Key != 0 && H::Input->IsDown(CFG::Aimbot_Ignore_Untagged_Key))
 			{
@@ -302,121 +304,212 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 			if (CFG::Aimbot_Hitscan_Target_LagRecords)
 			{
 				int nRecords = 0;
-				bool bHasValidLagRecords = false;
+
+				// Per-player candidate: collect all valid positions (real + lag records),
+				// then pick the best one for this player before adding to global list.
+				// This ensures lag records compete against the real model for the same player,
+				// not against other players' real models in the global sort.
+				struct PlayerCandidate_t {
+					Vec3 vPos;
+					Vec3 vAngleTo;
+					float flFOVTo;
+					float flDistTo;
+					float flSimTime;
+					const LagRecord_t* pLagRecord;
+					float flScore;  // Lower = better candidate
+					float flVelocity2D;  // Target speed at this record (for headshot stability scoring)
+				};
+				std::vector<PlayerCandidate_t> candidates;
 
 				if (F::LagRecords->HasRecords(pPlayer, &nRecords))
 				{
-					// Determine backtrack range based on weapon and fake latency
-					const bool bFakeLatencyActive = F::LagRecords->GetFakeLatency() > 0.0f;
-					const int nWeaponID = pWeapon->GetWeaponID();
-					const bool bIsSniperRifle = (nWeaponID == TF_WEAPON_SNIPERRIFLE || 
-												 nWeaponID == TF_WEAPON_SNIPERRIFLE_CLASSIC || 
-												 nWeaponID == TF_WEAPON_SNIPERRIFLE_DECAP);
-					const bool bIsSniper = pLocal->m_iClass() == TF_CLASS_SNIPER;
-					const bool bIsAmbassador = (pWeapon->m_iItemDefinitionIndex() == Spy_m_TheAmbassador || 
-												pWeapon->m_iItemDefinitionIndex() == Spy_m_FestiveAmbassador);
-					
-					int nStartRecord = 1;
-					int nEndRecord = nRecords;
+					const float flFakeLatency = F::LagRecords->GetFakeLatency();
+					const bool bFakeLatencyActive = flFakeLatency > 0.0f;
 					const bool bDoubletap = Shifting::bRapidFireWantShift;
-					
-					// When fake latency is 0 and using sniper rifle: add original model as valid target alongside backtrack
-					if (!bFakeLatencyActive && bIsSniper && bIsSniperRifle)
-					{
-						Vec3 vPos = pPlayer->GetHitboxPos(nAimHitbox);
-						Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
-						const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
-						const float flDistTo = vLocalPos.DistTo(vPos);
 
-						if (CFG::Aimbot_Hitscan_Sort == 0 && flFOVTo <= CFG::Aimbot_Hitscan_FOV)
+					const float flIdealAge = F::LagRecords->GetServerAcceptedAge();
+					const float flAgeTolerance = F::LagRecords->GetServerAcceptedAgeRange();
+					constexpr float TELEPORT_DIST_SQR = 64.0f * 64.0f;
+
+					// === Real model (current position) ===
+					// Only valid when fake latency is off — with fake latency, server backtracks
+					if (!bFakeLatencyActive)
+					{
+						const float flCurrentAge = I::GlobalVars->curtime - pPlayer->m_flSimulationTime();
+						if (F::LagRecords->IsRecordAgeValidForServer(flCurrentAge))
 						{
-							m_vecTargets.emplace_back(AimTarget_t { pPlayer, vPos, vAngleTo, flFOVTo, flDistTo}, nAimHitbox, pPlayer->m_flSimulationTime());
+							Vec3 vPos = pPlayer->GetHitboxPos(nAimHitbox);
+							Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
+							const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
+							const float flDistTo = vLocalPos.DistTo(vPos);
+							const float flVel2D = pPlayer->m_vecVelocity().Length2D();
+
+							if (CFG::Aimbot_Hitscan_Sort != 0 || flFOVTo <= CFG::Aimbot_Hitscan_FOV)
+							{
+								// Score: distance-based (closer = better)
+								const float flScore = (CFG::Aimbot_Hitscan_Sort == 0) ? flFOVTo : flDistTo;
+								candidates.push_back({ vPos, vAngleTo, flFOVTo, flDistTo, pPlayer->m_flSimulationTime(), nullptr, flScore, flVel2D });
+							}
 						}
 					}
-					
-					// Sniper rifles, Ambassador, OR fake latency: prioritize 3rd-from-last backtrack
-					if ((bIsSniper && bIsSniperRifle) || bIsAmbassador || bFakeLatencyActive)
+
+					// === Interpolated record at ideal target simtime ===
 					{
-						nStartRecord = std::max(1, nRecords - 5);
-						// Preserve DT last tick avoidance when resetting end record
-						nEndRecord = bDoubletap && nRecords > 1 ? nRecords - 1 : nRecords;
-						
-						// Prioritize the 3rd-from-last backtrack first (best balance, avoids blocking)
-						const int nPriorityRecord = nRecords - 3;
-						if (nPriorityRecord >= 1 && nPriorityRecord < nRecords)
+						const float flIdealTargetSimTime = I::GlobalVars->curtime - flIdealAge;
+						bool bIsInterpolated = false;
+						LagRecord_t interpRecord = F::LagRecords->GetInterpolatedRecord(pPlayer, flIdealTargetSimTime, &bIsInterpolated);
+
+						if (interpRecord.bIsAlive && interpRecord.Player == pPlayer)
 						{
-							const auto pRecord = F::LagRecords->GetRecord(pPlayer, nPriorityRecord, true);
-							if (pRecord && F::LagRecords->DiffersFromCurrent(pRecord))
+							const float flInterpAge = I::GlobalVars->curtime - interpRecord.SimulationTime;
+							const float flAgeDelta = fabsf(flInterpAge - flIdealAge);
+							if (flAgeDelta <= flAgeTolerance + 0.05f && flInterpAge <= F::LagRecords->GetMaxUnlag())
 							{
-								bHasValidLagRecords = true;
-								Vec3 vPos = SDKUtils::GetHitboxPosFromMatrix(pPlayer, nAimHitbox, const_cast<matrix3x4_t*>(pRecord->BoneMatrix));
+								static LagRecord_t s_interpRecord = {};
+								s_interpRecord = interpRecord;
+
+								Vec3 vPos = SDKUtils::GetHitboxPosFromMatrix(pPlayer, nAimHitbox, const_cast<matrix3x4_t*>(s_interpRecord.BoneMatrix));
 								Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
 								const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
 								const float flDistTo = vLocalPos.DistTo(vPos);
+								const float flVel2D = s_interpRecord.Velocity.Length2D();
 
-								if (CFG::Aimbot_Hitscan_Sort == 0 && flFOVTo <= CFG::Aimbot_Hitscan_FOV)
+								if (CFG::Aimbot_Hitscan_Sort != 0 || flFOVTo <= CFG::Aimbot_Hitscan_FOV)
 								{
-									m_vecTargets.emplace_back(AimTarget_t {
-										pPlayer, vPos, vAngleTo, flFOVTo, flDistTo
-									}, nAimHitbox, pRecord->SimulationTime, pRecord);
+									// Score: fake latency → age delta (closer to ideal = better), no fake latency → distance
+									const float flScore = bFakeLatencyActive ? flAgeDelta : ((CFG::Aimbot_Hitscan_Sort == 0) ? flFOVTo : flDistTo);
+									candidates.push_back({ vPos, vAngleTo, flFOVTo, flDistTo, s_interpRecord.SimulationTime, &s_interpRecord, flScore, flVel2D });
 								}
 							}
 						}
 					}
 
-					for (int n = nStartRecord; n < nEndRecord; n++)
+					// === Individual lag records ===
 					{
-						// Skip the priority record if we already added it
-						if (((bIsSniper && bIsSniperRifle) || bIsAmbassador || bFakeLatencyActive) && n == nRecords - 3)
-							continue;
-						
-						const auto pRecord = F::LagRecords->GetRecord(pPlayer, n, true);
+						const int nStart = bFakeLatencyActive ? std::max(1, nRecords - 5) : 1;
+						const int nEnd = bDoubletap && nRecords > 1 ? nRecords - 1 : nRecords;
 
-						if (!pRecord || !F::LagRecords->DiffersFromCurrent(pRecord))
-							continue;
+						for (int n = nStart; n <= nEnd; n++)
+						{
+							const auto pRecord = F::LagRecords->GetRecord(pPlayer, n, true);
+							if (!pRecord)
+								continue;
 
-						bHasValidLagRecords = true;
-						Vec3 vPos = SDKUtils::GetHitboxPosFromMatrix(pPlayer, nAimHitbox, const_cast<matrix3x4_t*>(pRecord->BoneMatrix));
-						Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
-						const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
-						const float flDistTo = vLocalPos.DistTo(vPos);
+							if (!pRecord->bIsAlive)
+								continue;
 
-						if (CFG::Aimbot_Hitscan_Sort == 0 && flFOVTo > CFG::Aimbot_Hitscan_FOV)
-							continue;
+							if (!bFakeLatencyActive && !F::LagRecords->DiffersFromCurrent(pRecord))
+								continue;
 
-						m_vecTargets.emplace_back(AimTarget_t {
-							pPlayer, vPos, vAngleTo, flFOVTo, flDistTo
-						}, nAimHitbox, pRecord->SimulationTime, pRecord);
+							const float flRecordAge = I::GlobalVars->curtime - pRecord->SimulationTime;
+							const float flAgeDelta = fabsf(flRecordAge - flIdealAge);
+							if (flAgeDelta > flAgeTolerance + 0.05f)
+								continue;
+
+							if (n > 1)
+							{
+								const auto pPrevRecord = F::LagRecords->GetRecord(pPlayer, n - 1, true);
+								if (pPrevRecord)
+								{
+									Vec3 vDelta = pRecord->AbsOrigin - pPrevRecord->AbsOrigin;
+									if (vDelta.Length2DSqr() > TELEPORT_DIST_SQR)
+										continue;
+								}
+							}
+
+							Vec3 vPos = SDKUtils::GetHitboxPosFromMatrix(pPlayer, nAimHitbox, const_cast<matrix3x4_t*>(pRecord->BoneMatrix));
+							Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
+							const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
+							const float flDistTo = vLocalPos.DistTo(vPos);
+							const float flVel2D = pRecord->Velocity.Length2D();
+
+							if (CFG::Aimbot_Hitscan_Sort == 0 && flFOVTo > CFG::Aimbot_Hitscan_FOV)
+								continue;
+
+							const float flScore = bFakeLatencyActive ? flAgeDelta : ((CFG::Aimbot_Hitscan_Sort == 0) ? flFOVTo : flDistTo);
+							candidates.push_back({ vPos, vAngleTo, flFOVTo, flDistTo, pRecord->SimulationTime, pRecord, flScore, flVel2D });
+						}
+					}
+
+					// === Fakelag fix: predicted position ===
+					if (CFG::Aimbot_Hitscan_FakeLagFix && F::FakeLagFix->IsChoking(pPlayer))
+					{
+						Vec3 vPredictedPos = F::FakeLagFix->GetPredictedPosition(pPlayer);
+						float flPredictedSimTime = F::FakeLagFix->GetPredictedSimTime(pPlayer);
+
+						const float flPredictedAge = I::GlobalVars->curtime - flPredictedSimTime;
+						const float flPredictedAgeDelta = fabsf(flPredictedAge - flIdealAge);
+						if (flPredictedAgeDelta <= flAgeTolerance + 0.05f)
+						{
+							Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPredictedPos);
+							const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
+							const float flDistTo = vLocalPos.DistTo(vPredictedPos);
+							const float flVel2D = pPlayer->m_vecVelocity().Length2D();
+
+							if (CFG::Aimbot_Hitscan_Sort != 0 || flFOVTo <= CFG::Aimbot_Hitscan_FOV)
+							{
+								const float flScore = bFakeLatencyActive ? flPredictedAgeDelta : ((CFG::Aimbot_Hitscan_Sort == 0) ? flFOVTo : flDistTo);
+								candidates.push_back({ vPredictedPos, vAngleTo, flFOVTo, flDistTo, flPredictedSimTime, nullptr, flScore, flVel2D });
+							}
+						}
 					}
 				}
 
-				// Fallback: if no valid lag records exist that differ from current (enemy standing still), target the real model position
-				// Skip this for sniper rifles with no fake latency since we already added the original model above
-				const bool bFakeLatencyActive = F::LagRecords->GetFakeLatency() > 0.0f;
-				const int nWeaponID = pWeapon->GetWeaponID();
-				const bool bIsSniperRifle = (nWeaponID == TF_WEAPON_SNIPERRIFLE || 
-											 nWeaponID == TF_WEAPON_SNIPERRIFLE_CLASSIC || 
-											 nWeaponID == TF_WEAPON_SNIPERRIFLE_DECAP);
-				const bool bIsSniper = pLocal->m_iClass() == TF_CLASS_SNIPER;
-				const bool bAlreadyAddedOriginal = !bFakeLatencyActive && bIsSniper && bIsSniperRifle;
-				
-				if (!bHasValidLagRecords && !bAlreadyAddedOriginal)
+				// Fallback: no lag records exist at all, target real model (only without fake latency)
+				if (candidates.empty() && F::LagRecords->GetFakeLatency() <= 0.0f)
 				{
 					Vec3 vPos = pPlayer->GetHitboxPos(nAimHitbox);
 					Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
 					const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
 					const float flDistTo = vLocalPos.DistTo(vPos);
+					const float flVel2D = pPlayer->m_vecVelocity().Length2D();
 
-					if (CFG::Aimbot_Hitscan_Sort == 0 && flFOVTo <= CFG::Aimbot_Hitscan_FOV)
+					if (CFG::Aimbot_Hitscan_Sort != 0 || flFOVTo <= CFG::Aimbot_Hitscan_FOV)
 					{
-						m_vecTargets.emplace_back(AimTarget_t { pPlayer, vPos, vAngleTo, flFOVTo, flDistTo}, nAimHitbox, pPlayer->m_flSimulationTime());
+						candidates.push_back({ vPos, vAngleTo, flFOVTo, flDistTo, pPlayer->m_flSimulationTime(), nullptr,
+							(CFG::Aimbot_Hitscan_Sort == 0) ? flFOVTo : flDistTo, flVel2D });
 					}
 				}
-			}
 
+				// For headshot weapons (sniper/ambassador): penalize fast-moving candidates
+				// A stationary target is far easier to headshot than one moving at 400+ HU/s
+				// Velocity penalty: 0 HU/s → +0, 200 HU/s → +50, 400+ HU/s → +100 to score
+				const bool bHeadshotWeapon = IsHeadshotCapableWeapon(pWeapon);
+				if (bHeadshotWeapon)
+				{
+					for (auto& c : candidates)
+					{
+						// Velocity penalty: clamp at 400 HU/s, scale to 0-100 penalty
+						const float flVelPenalty = std::min(c.flVelocity2D, 400.f) / 400.f * 100.f;
+						c.flScore += flVelPenalty;
+					}
+				}
+
+				// Sort this player's candidates by score (lower = better)
+				// Best candidate = closest to crosshair (FOV sort) or closest distance (dist sort)
+				// With fake latency: closest to ideal server age wins
+				// With headshot weapon: slower targets preferred (velocity penalty added to score)
+				std::sort(candidates.begin(), candidates.end(),
+					[](const PlayerCandidate_t& a, const PlayerCandidate_t& b) {
+						return a.flScore < b.flScore;
+					});
+
+				// Add ALL candidates for this player to the global target list
+				// The trace verification loop will skip unhittable ones (behind cover, wrong hitbox, etc.)
+				// This way if the best candidate (real model) is behind cover, the next candidate (lag record) gets tried
+				for (const auto& c : candidates)
+				{
+					m_vecTargets.emplace_back(AimTarget_t { pPlayer, c.vPos, c.vAngleTo, c.flFOVTo, c.flDistTo }, nAimHitbox, c.flSimTime, c.pLagRecord);
+				}
+			}
 			else
 			{
 				// Not using lag records, just target current position
+				// BUT: with fake latency active, the current model is NOT where the server sees the player
+				// The server backtracks, so we must skip this target entirely
+				if (F::LagRecords->GetFakeLatency() > 0.0f)
+					continue;
+
 				Vec3 vPos = pPlayer->GetHitboxPos(nAimHitbox);
 				Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
 				const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
@@ -484,6 +577,25 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 
 	if (m_vecTargets.empty())
 		return false;
+
+	// Visible Only pre-filter: when sorting by distance, remove targets
+	// that are occluded by world geometry so the aimbot prioritizes
+	// visible enemies instead of wasting time on invisible closest ones
+	if (CFG::Aimbot_Hitscan_Sort == 1 && CFG::Aimbot_Hitscan_Sort_VisibleOnly)
+	{
+		const Vec3 vLocalEye = GetPredictedShootPos(pLocal, pCmd);
+		std::erase_if(m_vecTargets, [&](const AimTarget_t& t) -> bool
+		{
+			// Quick world-only trace to check if target position is visible
+			CGameTrace trace = {};
+			CTraceFilterWorldAndPropsOnlyAmalgam filter = {};
+			H::AimUtils->Trace(vLocalEye, t.Position, MASK_SHOT | CONTENTS_GRATE, &filter, &trace);
+			return trace.fraction < 1.0f;  // Occluded by world — remove
+		});
+
+		if (m_vecTargets.empty())
+			return false;
+	}
 
 	// Sort by target priority
 	F::AimbotCommon->Sort(m_vecTargets, CFG::Aimbot_Hitscan_Sort);
@@ -581,8 +693,15 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 
 bool CAimbotHitscan::ShouldAim(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon)
 {
-	if (CFG::Aimbot_Hitscan_Aim_Type == 1 && (!IsFiring(pCmd, pWeapon) || !pWeapon->HasPrimaryAmmoForShot()))
-		return false;
+	if (CFG::Aimbot_Hitscan_Aim_Type == 1)
+	{
+		// Silent aim: must aim whenever IN_ATTACK is set in the command,
+		// because the server will fire on the next available tick using
+		// whatever viewangles are in the cmd. IsFiring() requires
+		// bCanPrimaryAttack which can be false on the tick we add IN_ATTACK.
+		if (!(pCmd->buttons & IN_ATTACK) || !pWeapon->HasPrimaryAmmoForShot())
+			return false;
+	}
 
 	// Smooth and Triggerbot share the same ShouldAim behavior
 	if (CFG::Aimbot_Hitscan_Aim_Type == 2 || CFG::Aimbot_Hitscan_Aim_Type == 3)
@@ -613,16 +732,19 @@ void CAimbotHitscan::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles
 		// Plain
 		case 0:
 		{
+			H::AimUtils->FixMovement(pCmd, vAngleTo);
 			pCmd->viewangles = vAngleTo;
 			break;
 		}
 		
-		// Silent (only set angles on the EXACT tick when firing)
+		// Silent (only set angles when IN_ATTACK is active - server will fire on next available tick)
 		case 1:
 		{
-			// Match Amalgam's approach: check G::Attacking == 1
-			// G::Attacking is updated in Run() BEFORE Aim() is called
-			if (G::Attacking == 1)
+			// Must set angles whenever IN_ATTACK is in the command,
+			// not just when G::Attacking == 1 (bCanPrimaryAttack).
+			// The server queues the shot and fires when cooldown expires,
+			// using whatever viewangles are in the cmd at that point.
+			if (pCmd->buttons & IN_ATTACK)
 			{
 				H::AimUtils->FixMovement(pCmd, vAngleTo);
 				pCmd->viewangles = vAngleTo;
@@ -647,6 +769,7 @@ void CAimbotHitscan::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles
 			{
 				Vec3 vNewAngles = vCurrentAngles + vDelta / CFG::Aimbot_Hitscan_Smoothing;
 				Math::ClampAngles(vNewAngles);
+				H::AimUtils->FixMovement(pCmd, vNewAngles);
 				pCmd->viewangles = vNewAngles;
 				
 				// Store smooth aim angles for restoration at end of CreateMove
@@ -675,14 +798,22 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 	if (!CFG::Aimbot_AutoShoot)
 		return false;
 
+	// AutoScope wait-after-shot: don't fire until re-scoped
+	if (G::bAutoScopeWaitActive)
+		return false;
+
+	// Validate target entity is still alive — it may have been destroyed since GetTarget
+	if (!target.Entity || !H::Entities->IsEntityValid(target.Entity))
+		return false;
+
 	// Hitchance check - calculate if we meet the required hit probability
 	// NOTE: Minigun uses tapfire delay system instead of hitchance blocking
 	// The tapfire delay is checked later and scales with distance + hitchance slider
-	if (CFG::Aimbot_Hitscan_Hitchance > 0 && target.Entity && pWeapon->GetWeaponID() != TF_WEAPON_MINIGUN)
+	if (CFG::Aimbot_Hitscan_Hitchance > 0 && pWeapon->GetWeaponID() != TF_WEAPON_MINIGUN)
 	{
 		// Get hitbox radius based on target type
 		float flHitboxRadius = 12.0f; // Default for players (head ~24 units diameter)
-		
+
 		if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
 		{
 			const auto pPlayer = target.Entity->As<C_TFPlayer>();
@@ -715,7 +846,22 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 		const bool bRapidFireActive = bRapidFireKey && nStoredTicks >= F::Ticks->GetOptimalDTTicks();
 		const int nRapidFireShots = bRapidFireActive ? 2 : 1; // DoubleTap fires 2 shots
 
-		const Vec3 vShootPos = pLocal->GetShootPos();
+		// Fakelag uncertainty: reduce effective hitbox radius when enemy is choking
+		// Position prediction is less accurate with more choke ticks, so we penalize hitchance
+		if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer && CFG::Aimbot_Hitscan_FakeLagFix)
+		{
+			const auto pTarget = target.Entity->As<C_TFPlayer>();
+			if (pTarget && F::FakeLagFix->IsChoking(pTarget))
+			{
+				const int nChokeTicks = F::FakeLagFix->GetTicksSinceUpdate(pTarget);
+				// Each choke tick adds ~5 units of position uncertainty (based on max player speed)
+				// Reduce hitbox radius by this uncertainty amount
+				const float flUncertainty = static_cast<float>(nChokeTicks) * 5.0f;
+				flHitboxRadius = std::max(1.0f, flHitboxRadius - flUncertainty);
+			}
+		}
+
+		const Vec3 vShootPos = GetPredictedShootPos(pLocal, pCmd);
 		const float flHitchance = F::Hitchance->Calculate(pLocal, pWeapon, vShootPos, target.Position, flHitboxRadius, bRapidFireActive, nRapidFireShots);
 		
 		if (flHitchance < static_cast<float>(CFG::Aimbot_Hitscan_Hitchance))
@@ -823,7 +969,7 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 	{
 		Vec3 vForward = {};
 		Math::AngleVectors(pCmd->viewangles, &vForward);
-		const Vec3 vTraceStart = pLocal->GetShootPos();
+		const Vec3 vTraceStart = GetPredictedShootPos(pLocal, pCmd);
 		const Vec3 vTraceEnd = vTraceStart + (vForward * 8192.0f);
 
 		if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
@@ -1047,16 +1193,28 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 		return;
 
 	const bool isFiring = IsFiring(pCmd, pWeapon);
+	const auto aimKeyDown = CFG::Aimbot_Always_On || H::Input->IsDown(CFG::Aimbot_Key);
+
+	// Auto Rev: spin up minigun when aim key is held, even without a target
+	if (CFG::Aimbot_Hitscan_Auto_Rev && aimKeyDown && pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
+	{
+		pCmd->buttons |= IN_ATTACK2;
+	}
 
 	HitscanTarget_t target = {};
 	if (GetTarget(pLocal, pWeapon, pCmd, target) && target.Entity)
 	{
+		// Re-validate entity — it may have been destroyed between GetTarget and here
+		// (e.g. class change destroys and recreates the player entity)
+		if (!H::Entities->IsEntityValid(target.Entity))
+			return;
+
 		G::nTargetIndexEarly = target.Entity->entindex();
 
-		const auto aimKeyDown = CFG::Aimbot_Always_On || H::Input->IsDown(CFG::Aimbot_Key);
 		if (aimKeyDown || isFiring)
 		{
 			G::nTargetIndex = target.Entity->entindex();
+			F::CrashHandler->s_Context.m_nTargetIndex = G::nTargetIndex;
 
 			// Auto Scope
 			if (CFG::Aimbot_Hitscan_Auto_Scope
@@ -1125,25 +1283,14 @@ void CAimbotHitscan::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 				}
 
 				// Set tick_count for lag compensation
-				if (bIsFiring && target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
+				// Server: targettick = cmd->tick_count - TIME_TO_TICKS(lerpTime)
+				// We want targettick = TIME_TO_TICKS(simTime), so tick_count = TIME_TO_TICKS(simTime + lerp)
+				// MUST use SDKUtils::GetLerp() (reads ConVars directly) — GetClientInterpAmount()
+				// returns 0 when auto-interp is enabled, which would make the server backtrack
+				// to the wrong tick (off by lerpTicks).
+				if (bIsFiring && target.Entity && H::Entities->IsEntityValid(target.Entity) && target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
 				{
-					if (CFG::Misc_AntiCheat_Enabled)
-					{
-						// Anti-cheat compatibility: match Amalgam's behavior
-						// In Amalgam, CreateMove() returns early when anti-cheat is enabled,
-						// which means tick_count is NOT adjusted for fake interp.
-						// We still need to set tick_count for the backtrack record though.
-						// Use just the lerp value, don't add fake interp (matching Amalgam's skip)
-						pCmd->tick_count = TIME_TO_TICKS(target.SimulationTime + SDKUtils::GetLerp());
-					}
-					else if (CFG::Misc_Accuracy_Improvements)
-					{
-						pCmd->tick_count = TIME_TO_TICKS(target.SimulationTime + SDKUtils::GetLerp());
-					}
-					else if (target.LagRecord)
-					{
-						pCmd->tick_count = TIME_TO_TICKS(target.SimulationTime + GetClientInterpAmount());
-					}
+					pCmd->tick_count = TIME_TO_TICKS(target.SimulationTime + SDKUtils::GetLerp());
 				}
 			}
 		}

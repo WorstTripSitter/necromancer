@@ -1,454 +1,495 @@
 #include "CrashHandler.h"
-#include <Psapi.h>
-#include <TlHelp32.h>
-#include <fstream>
-#include <iomanip>
-#include <ctime>
-#include <ShlObj.h>
+
 #include <DbgHelp.h>
+#include <Psapi.h>
+#include <deque>
+#include <sstream>
+#include <format>
+#include <ctime>
+#include <unordered_map>
+#include <filesystem>
 
-#pragma comment(lib, "Psapi.lib")
-#pragma comment(lib, "DbgHelp.lib")
+#pragma comment(lib, "dbghelp.lib")
+#pragma comment(lib, "psapi.lib")
 
-LPTOP_LEVEL_EXCEPTION_FILTER CCrashHandler::s_PreviousFilter = nullptr;
-bool CCrashHandler::s_Initialized = false;
+#define STATUS_RUNTIME_ERROR ((DWORD)0xE06D7363)
 
-// Quick log function that writes immediately to disk
-static void QuickLog(const char* message)
+struct Frame_t
 {
-    CreateDirectoryA("C:\\necromancer_tf2", nullptr);
-    CreateDirectoryA("C:\\necromancer_tf2\\crashlog", nullptr);
-    
-    FILE* f = nullptr;
-    fopen_s(&f, "C:\\necromancer_tf2\\crashlog\\quicklog.txt", "a");
-    if (f)
-    {
-        auto now = std::time(nullptr);
-        tm timeInfo = {};
-        localtime_s(&timeInfo, &now);
-        char timeStr[64];
-        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeInfo);
-        fprintf(f, "[%s] %s\n", timeStr, message);
-        fflush(f);
-        fclose(f);
-    }
+	std::string m_sModule = "";
+	uintptr_t m_uBase = 0;
+	uintptr_t m_uAddress = 0;
+	std::string m_sFile = "";
+	unsigned int m_uLine = 0;
+	std::string m_sName = "";
+};
+
+PVOID CCrashHandler::s_pVectoredHandle = nullptr;
+bool CCrashHandler::s_Initialized = false;
+CrashContext_t CCrashHandler::s_Context = {};
+
+static std::unordered_map<void*, bool> s_mAddresses = {};
+static int s_iExceptions = 0;
+
+static inline std::deque<Frame_t> StackTrace(PCONTEXT pContext)
+{
+	std::deque<Frame_t> vTrace = {};
+
+	HANDLE hProcess = GetCurrentProcess();
+	HANDLE hThread = GetCurrentThread();
+
+	if (!SymInitialize(hProcess, nullptr, TRUE))
+		return vTrace;
+
+	SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
+
+	STACKFRAME64 tStackFrame = {};
+	tStackFrame.AddrPC.Offset = pContext->Rip;
+	tStackFrame.AddrFrame.Offset = pContext->Rbp;
+	tStackFrame.AddrStack.Offset = pContext->Rsp;
+	tStackFrame.AddrPC.Mode = AddrModeFlat;
+	tStackFrame.AddrFrame.Mode = AddrModeFlat;
+	tStackFrame.AddrStack.Mode = AddrModeFlat;
+
+	CONTEXT tContext = *pContext;
+	int nFrames = 0;
+
+	while (StackWalk64(IMAGE_FILE_MACHINE_AMD64, hProcess, hThread, &tStackFrame, &tContext, nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr))
+	{
+		if (tStackFrame.AddrPC.Offset == 0)
+			break;
+		if (nFrames++ > 64)
+			break;
+
+		vTrace.push_back({ .m_uAddress = tStackFrame.AddrPC.Offset });
+		Frame_t& tFrame = vTrace.back();
+
+		if (auto hBase = HINSTANCE(SymGetModuleBase64(hProcess, tStackFrame.AddrPC.Offset)))
+		{
+			tFrame.m_uBase = uintptr_t(hBase);
+
+			char buffer[MAX_PATH];
+			if (GetModuleBaseName(hProcess, hBase, buffer, sizeof(buffer) / sizeof(char)))
+				tFrame.m_sModule = buffer;
+			else
+				tFrame.m_sModule = std::format("{:#x}", tFrame.m_uBase);
+		}
+
+		{
+			DWORD dwOffset = 0;
+			IMAGEHLP_LINE64 line = {};
+			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+			if (SymGetLineFromAddr64(hProcess, tStackFrame.AddrPC.Offset, &dwOffset, &line))
+			{
+				tFrame.m_sFile = line.FileName;
+				tFrame.m_uLine = line.LineNumber;
+				auto iFind = tFrame.m_sFile.rfind("\\");
+				if (iFind != std::string::npos)
+					tFrame.m_sFile.replace(0, iFind + 1, "");
+			}
+		}
+
+		{
+			DWORD64 dwOffset = 0;
+			char buf[sizeof(IMAGEHLP_SYMBOL64) + 255];
+			auto symbol = PIMAGEHLP_SYMBOL64(buf);
+			symbol->SizeOfStruct = sizeof(IMAGEHLP_SYMBOL64) + 255;
+			symbol->MaxNameLength = 254;
+			if (SymGetSymFromAddr64(hProcess, tStackFrame.AddrPC.Offset, &dwOffset, symbol))
+				tFrame.m_sName = symbol->Name;
+		}
+	}
+
+	SymCleanup(hProcess);
+	return vTrace;
 }
 
-// Vectored exception handler - catches exceptions before SEH
-static LONG WINAPI VectoredExceptionHandler(EXCEPTION_POINTERS* pExceptionInfo)
+static std::string GetModuleOffset(void* address)
 {
-    DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
-    
-    // Skip non-crash exceptions
-    if (code == EXCEPTION_BREAKPOINT || 
-        code == EXCEPTION_SINGLE_STEP ||
-        code == DBG_PRINTEXCEPTION_C ||
-        code == 0x406D1388 || // Thread naming exception
-        code == 0x4001000A)   // Thread exit
-    {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    
-    // Get module name for the crash address
-    char moduleName[MAX_PATH] = "Unknown";
-    HMODULE hModule = nullptr;
-    void* crashAddr = pExceptionInfo->ExceptionRecord->ExceptionAddress;
-    
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        (LPCSTR)crashAddr, &hModule))
-    {
-        GetModuleFileNameA(hModule, moduleName, MAX_PATH);
-        // Get just the filename
-        char* lastSlash = strrchr(moduleName, '\\');
-        if (lastSlash) memmove(moduleName, lastSlash + 1, strlen(lastSlash));
-    }
-    
-    // Calculate offset within module
-    DWORD64 offset = hModule ? ((DWORD64)crashAddr - (DWORD64)hModule) : 0;
-    
-    // Get access violation details
-    char accessInfo[128] = "";
-    if (code == EXCEPTION_ACCESS_VIOLATION && pExceptionInfo->ExceptionRecord->NumberParameters >= 2)
-    {
-        ULONG_PTR accessType = pExceptionInfo->ExceptionRecord->ExceptionInformation[0];
-        ULONG_PTR targetAddr = pExceptionInfo->ExceptionRecord->ExceptionInformation[1];
-        sprintf_s(accessInfo, " [%s 0x%p]", 
-            accessType == 0 ? "READ" : (accessType == 1 ? "WRITE" : "EXEC"),
-            (void*)targetAddr);
-    }
-    
-    // Log immediately with full details
-    char buf[1024];
-    sprintf_s(buf, "CRASH: Code=0x%08X Module=%s+0x%llX Addr=0x%p%s", 
-        code, moduleName, offset, crashAddr, accessInfo);
-    QuickLog(buf);
-    
-    // Also log register state
-    CONTEXT* ctx = pExceptionInfo->ContextRecord;
-    sprintf_s(buf, "  RIP=0x%llX RSP=0x%llX RBP=0x%llX", ctx->Rip, ctx->Rsp, ctx->Rbp);
-    QuickLog(buf);
-    sprintf_s(buf, "  RAX=0x%llX RBX=0x%llX RCX=0x%llX RDX=0x%llX", ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx);
-    QuickLog(buf);
-    
-    return EXCEPTION_CONTINUE_SEARCH; // Let the normal handler process it
+	HMODULE hModule = nullptr;
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast<LPCSTR>(address), &hModule))
+	{
+		char moduleName[MAX_PATH] = {};
+		GetModuleFileNameA(hModule, moduleName, MAX_PATH);
+		std::string fullPath(moduleName);
+		size_t pos = fullPath.find_last_of("\\/");
+		std::string name = (pos != std::string::npos) ? fullPath.substr(pos + 1) : fullPath;
+		return std::format("{}+{:#x}", name, reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(hModule));
+	}
+	return std::format("{:#x}", reinterpret_cast<uintptr_t>(address));
+}
+
+// Get the directory where our DLL lives — avoids __ImageBase which isn't always available
+static std::string GetModuleDirectory()
+{
+	char szPath[MAX_PATH] = {};
+	HMODULE hMod = nullptr;
+	// Find our DLL by searching for our own module handle via a known address
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast<LPCSTR>(&GetModuleDirectory), &hMod))
+	{
+		GetModuleFileNameA(hMod, szPath, MAX_PATH);
+	}
+	else
+	{
+		// Fallback: current directory
+		GetCurrentDirectoryA(MAX_PATH, szPath);
+	}
+	return std::string(szPath);
+}
+
+static bool WriteMinidump(PEXCEPTION_POINTERS ExceptionInfo)
+{
+	std::filesystem::path dumpDir = std::filesystem::path(GetModuleDirectory()).parent_path() / "dumps";
+	std::filesystem::create_directories(dumpDir);
+
+	auto now = std::time(nullptr);
+	tm timeInfo = {};
+	localtime_s(&timeInfo, &now);
+	char timeStr[32];
+	strftime(timeStr, sizeof(timeStr), "%Y%m%d_%H%M%S", &timeInfo);
+	std::string dumpPath = (dumpDir / std::format("crash_{}.dmp", timeStr)).string();
+
+	HANDLE hFile = CreateFileA(dumpPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (hFile == INVALID_HANDLE_VALUE)
+		return false;
+
+	MINIDUMP_EXCEPTION_INFORMATION mei = {};
+	mei.ThreadId = GetCurrentThreadId();
+	mei.ExceptionPointers = ExceptionInfo;
+	mei.ClientPointers = FALSE;
+
+	DWORD dwDumpType = MiniDumpWithDataSegs | MiniDumpWithHandleData | MiniDumpWithThreadInfo;
+	bool bOk = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hFile, static_cast<MINIDUMP_TYPE>(dwDumpType), &mei, nullptr, nullptr);
+
+	CloseHandle(hFile);
+	return bOk;
+}
+
+// Dump loaded modules — critical for resolving addresses in post-mortem
+static void DumpModules(std::stringstream& ss)
+{
+	HMODULE hModules[256] = {};
+	DWORD cbNeeded = 0;
+	HANDLE hProcess = GetCurrentProcess();
+
+	if (!EnumProcessModules(hProcess, hModules, sizeof(hModules), &cbNeeded))
+		return;
+
+	DWORD nModules = cbNeeded / sizeof(HMODULE);
+	if (nModules > 256) nModules = 256;
+
+	MODULEINFO modInfo = {};
+	for (DWORD i = 0; i < nModules; i++)
+	{
+		if (!GetModuleInformation(hProcess, hModules[i], &modInfo, sizeof(modInfo)))
+			continue;
+
+		char szName[MAX_PATH] = {};
+		GetModuleBaseNameA(hProcess, hModules[i], szName, MAX_PATH);
+
+		ss << std::format("  {:<24s} base={:#x} size={:#x}\n", szName,
+			reinterpret_cast<uintptr_t>(modInfo.lpBaseOfDll), modInfo.SizeOfImage);
+	}
+}
+
+// SEH-safe helpers — must be plain C functions (no C++ objects) to use __try/__except
+
+// Read a pointer from memory safely — returns 0 if unreadable
+static uintptr_t SafeReadPtr(uintptr_t addr)
+{
+	__try { return *reinterpret_cast<uintptr_t*>(addr); }
+	__except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+
+// Read 4 pointers safely into output array
+static void SafeReadPtrs4(uintptr_t addr, uintptr_t out[4])
+{
+	__try {
+		auto* p = reinterpret_cast<uintptr_t*>(addr);
+		out[0] = p[0]; out[1] = p[1]; out[2] = p[2]; out[3] = p[3];
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		out[0] = out[1] = out[2] = out[3] = 0;
+	}
+}
+
+// Dump raw stack memory near RSP
+static void DumpStackMemory(std::stringstream& ss, PCONTEXT pContext)
+{
+	uintptr_t rsp = pContext->Rsp;
+	constexpr int NUM_PTRS = 32;
+	ss << "  RSP+0x00 .. RSP+0x100:\n";
+	for (int i = 0; i < NUM_PTRS; i += 4)
+	{
+		uintptr_t vals[4] = {};
+		SafeReadPtrs4(rsp + i * sizeof(uintptr_t), vals);
+		if (vals[0] == 0 && vals[1] == 0 && vals[2] == 0 && vals[3] == 0 && i > 0)
+			break;  // All zeros past the first row = unreadable or end of useful stack
+		ss << std::format("  +{:#04x}: {:16x} {:16x} {:16x} {:16x}\n",
+			i * sizeof(uintptr_t), vals[0], vals[1], vals[2], vals[3]);
+	}
+}
+
+// Annotate stack pointers — check if any value on the stack points into a known module
+static void AnnotateStackPointers(std::stringstream& ss, PCONTEXT pContext)
+{
+	uintptr_t rsp = pContext->Rsp;
+	constexpr int NUM_PTRS = 32;
+	int nAnnotated = 0;
+
+	for (int i = 0; i < NUM_PTRS && nAnnotated < 8; i++)
+	{
+		uintptr_t val = SafeReadPtr(rsp + i * sizeof(uintptr_t));
+		if (val == 0 || val < 0x10000)
+			continue;
+
+		HMODULE hModule = nullptr;
+		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCSTR>(val), &hModule))
+		{
+			char szName[MAX_PATH] = {};
+			GetModuleBaseNameA(GetCurrentProcess(), hModule, szName, MAX_PATH);
+			uintptr_t offset = val - reinterpret_cast<uintptr_t>(hModule);
+			ss << std::format("  RSP+{:#04x} -> {}+{:#x}\n", i * sizeof(uintptr_t), szName, offset);
+			nAnnotated++;
+		}
+	}
+}
+
+static LONG APIENTRY ExceptionFilter(PEXCEPTION_POINTERS ExceptionInfo)
+{
+	const char* sError = "UNKNOWN";
+	switch (ExceptionInfo->ExceptionRecord->ExceptionCode)
+	{
+	case STATUS_ACCESS_VIOLATION: sError = "ACCESS VIOLATION"; break;
+	case STATUS_STACK_OVERFLOW:   sError = "STACK OVERFLOW"; break;
+	case STATUS_HEAP_CORRUPTION:  sError = "HEAP CORRUPTION"; break;
+	case STATUS_RUNTIME_ERROR:    sError = "RUNTIME ERROR"; break;
+	case DBG_PRINTEXCEPTION_C:     return EXCEPTION_EXECUTE_HANDLER;
+	}
+
+	if (s_mAddresses.contains(ExceptionInfo->ExceptionRecord->ExceptionAddress)
+		|| s_iExceptions && GetAsyncKeyState(VK_SHIFT) & 0x8000 && GetAsyncKeyState(VK_RETURN) & 0x8000)
+		return EXCEPTION_EXECUTE_HANDLER;
+	s_mAddresses[ExceptionInfo->ExceptionRecord->ExceptionAddress];
+
+	std::stringstream ss;
+	ss << std::format("=== Necromancer Crash Report ===\n\n");
+	ss << std::format("Error: {} (0x{:X}) (occurrence #{})\n", sError, ExceptionInfo->ExceptionRecord->ExceptionCode, ++s_iExceptions);
+	ss << std::format("Built @ " __DATE__ ", " __TIME__ "\n");
+
+	{
+		auto now = std::time(nullptr);
+		tm timeInfo = {};
+		localtime_s(&timeInfo, &now);
+		char timeStr[64];
+		strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeInfo);
+		ss << std::format("Time @ {}\n", timeStr);
+	}
+
+	// ACCESS_VIOLATION specifics
+	if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_ACCESS_VIOLATION)
+	{
+		const ULONG_PTR* pInfo = ExceptionInfo->ExceptionRecord->ExceptionInformation;
+		const char* szOp = (pInfo[0] == 0) ? "READ" : (pInfo[0] == 1) ? "WRITE" : (pInfo[0] == 8) ? "DEP" : "UNKNOWN";
+		ss << std::format("Operation: {} at {:#x}\n", szOp, pInfo[1]);
+
+		// Annotate the faulting address — is it null? dangling? in freed memory?
+		if (pInfo[1] == 0)
+			ss << "  -> NULL pointer dereference\n";
+		else if (pInfo[1] < 0x10000)
+			ss << "  -> Near-null pointer (likely offset from null base)\n";
+		else if (pInfo[1] > 0x7FFE0000 && pInfo[1] < 0x7FFFF000)
+			ss << "  -> Address in kernel/shared region (possible use-after-free)\n";
+		else
+		{
+			// Check if the address falls in a known module
+			HMODULE hMod = nullptr;
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCSTR>(pInfo[1]), &hMod))
+			{
+				char szName[MAX_PATH] = {};
+				GetModuleBaseNameA(GetCurrentProcess(), hMod, szName, MAX_PATH);
+				ss << std::format("  -> Address inside module: {}\n", szName);
+			}
+		}
+	}
+
+	// Exception flags
+	ss << std::format("Exception flags: {:#x}  numParams: {}\n",
+		ExceptionInfo->ExceptionRecord->ExceptionFlags,
+		ExceptionInfo->ExceptionRecord->NumberParameters);
+
+	// Crash location with module info
+	const void* pCrashAddr = ExceptionInfo->ExceptionRecord->ExceptionAddress;
+	ss << std::format("Crash at: {}\n", GetModuleOffset(const_cast<void*>(pCrashAddr)));
+
+	// Thread info
+	ss << std::format("Thread ID: {} (0x{:X})\n", GetCurrentThreadId(), GetCurrentThreadId());
+
+	// Crash context
+	{
+		const auto& ctx = CCrashHandler::s_Context;
+		ss << "\n--- Crash Context ---\n";
+		ss << std::format("Hook: {}\n", ctx.m_pszLastHook);
+		ss << std::format("Feature: {}\n", ctx.m_pszLastFeature);
+		ss << std::format("InGame: {} | LevelTransition: {}\n", ctx.m_bInGame, ctx.m_bLevelTransition);
+		ss << std::format("Map: {}\n", ctx.m_szMapName[0] ? ctx.m_szMapName : "(unknown)");
+		ss << std::format("CmdNum: {} | TargetIdx: {}\n", ctx.m_nCommandNumber, ctx.m_nTargetIndex);
+	}
+
+	// Registers
+	ss << "\n--- Registers ---\n";
+	ss << std::format("RIP: {:#x}  ({})\n", ExceptionInfo->ContextRecord->Rip, GetModuleOffset(reinterpret_cast<void*>(ExceptionInfo->ContextRecord->Rip)));
+	ss << std::format("RAX: {:#x}\n", ExceptionInfo->ContextRecord->Rax);
+	ss << std::format("RCX: {:#x}\n", ExceptionInfo->ContextRecord->Rcx);
+	ss << std::format("RDX: {:#x}\n", ExceptionInfo->ContextRecord->Rdx);
+	ss << std::format("RBX: {:#x}\n", ExceptionInfo->ContextRecord->Rbx);
+	ss << std::format("RSP: {:#x}\n", ExceptionInfo->ContextRecord->Rsp);
+	ss << std::format("RBP: {:#x}\n", ExceptionInfo->ContextRecord->Rbp);
+	ss << std::format("RSI: {:#x}\n", ExceptionInfo->ContextRecord->Rsi);
+	ss << std::format("RDI: {:#x}\n", ExceptionInfo->ContextRecord->Rdi);
+	// Annotate register values that point into modules
+	{
+		struct { const char* name; DWORD64 val; } regs[] = {
+			{"RAX", ExceptionInfo->ContextRecord->Rax},
+			{"RCX", ExceptionInfo->ContextRecord->Rcx},
+			{"RDX", ExceptionInfo->ContextRecord->Rdx},
+			{"RBX", ExceptionInfo->ContextRecord->Rbx},
+			{"RSI", ExceptionInfo->ContextRecord->Rsi},
+			{"RDI", ExceptionInfo->ContextRecord->Rdi},
+			{"RBP", ExceptionInfo->ContextRecord->Rbp},
+		};
+		for (auto& r : regs)
+		{
+			if (r.val == 0 || r.val < 0x10000)
+				continue;
+			HMODULE hMod = nullptr;
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCSTR>(r.val), &hMod))
+			{
+				char szName[MAX_PATH] = {};
+				GetModuleBaseNameA(GetCurrentProcess(), hMod, szName, MAX_PATH);
+				uintptr_t offset = r.val - reinterpret_cast<uintptr_t>(hMod);
+				ss << std::format("  {} points into {}+{:#x}\n", r.name, szName, offset);
+			}
+		}
+	}
+
+	// Stack trace
+	ss << "\n--- Stack Trace ---\n";
+	if (auto vTrace = StackTrace(ExceptionInfo->ContextRecord); !vTrace.empty())
+	{
+		for (int i = 0; i < static_cast<int>(vTrace.size()); i++)
+		{
+			Frame_t& tFrame = vTrace[i];
+
+			ss << std::format("{}: ", i + 1);
+			if (tFrame.m_uBase)
+				ss << std::format("{}+{:#x}", tFrame.m_sModule, tFrame.m_uAddress - tFrame.m_uBase);
+			else
+				ss << std::format("{:#x}", tFrame.m_uAddress);
+			if (!tFrame.m_sName.empty())
+				ss << std::format(" ({})", tFrame.m_sName);
+			if (!tFrame.m_sFile.empty())
+				ss << std::format(" [{}:{}]", tFrame.m_sFile, tFrame.m_uLine);
+			ss << "\n";
+		}
+	}
+	else
+	{
+		// Fallback: RBP chain walk
+		uintptr_t pFrameAddr = ExceptionInfo->ContextRecord->Rbp;
+		ss << "(Symbol walk failed, trying RBP chain)\n";
+		for (int i = 0; i < 16 && pFrameAddr; i++)
+		{
+			uintptr_t nextFrame = SafeReadPtr(pFrameAddr);
+			uintptr_t retAddr = SafeReadPtr(pFrameAddr + sizeof(uintptr_t));
+			if (retAddr == 0)
+				break;
+			ss << std::format("{}: {}\n", i + 1, GetModuleOffset(reinterpret_cast<void*>(retAddr)));
+			pFrameAddr = nextFrame;
+		}
+	}
+
+	// Stack memory dump with annotated pointers
+	ss << "\n--- Stack Memory ---\n";
+	DumpStackMemory(ss, ExceptionInfo->ContextRecord);
+	AnnotateStackPointers(ss, ExceptionInfo->ContextRecord);
+
+	// Loaded modules — needed to resolve addresses from the raw register/stack dump
+	ss << "\n--- Loaded Modules ---\n";
+	DumpModules(ss);
+
+	// Write minidump
+	std::string szDumpPath;
+	if (WriteMinidump(ExceptionInfo))
+	{
+		szDumpPath = (std::filesystem::path(GetModuleDirectory()).parent_path() / "dumps").string();
+	}
+
+	ss << "\n";
+	if (!szDumpPath.empty())
+		ss << std::format("Minidump written to: {}\\crash_*.dmp\n", szDumpPath);
+
+	// Write full crash log to file — MessageBox can truncate long reports
+	std::string szLogPath;
+	{
+		std::filesystem::path logDir = std::filesystem::path(GetModuleDirectory()).parent_path() / "dumps";
+
+		auto now = std::time(nullptr);
+		tm timeInfo = {};
+		localtime_s(&timeInfo, &now);
+		char timeStr[32];
+		strftime(timeStr, sizeof(timeStr), "%Y%m%d_%H%M%S", &timeInfo);
+		szLogPath = (logDir / std::format("crash_{}.log", timeStr)).string();
+
+		std::filesystem::create_directories(logDir);
+		FILE* fp = nullptr;
+		if (fopen_s(&fp, szLogPath.c_str(), "w") == 0 && fp)
+		{
+			fputs(ss.str().c_str(), fp);
+			fclose(fp);
+		}
+	}
+
+	if (!szLogPath.empty())
+		ss << std::format("Crash log written to: {}\n", szLogPath);
+	ss << "Ctrl + C to copy this message.\n";
+
+	// Show MessageBox for real crashes
+	switch (ExceptionInfo->ExceptionRecord->ExceptionCode)
+	{
+	case STATUS_ACCESS_VIOLATION:
+	case STATUS_STACK_OVERFLOW:
+	case STATUS_HEAP_CORRUPTION:
+		MessageBoxA(nullptr, ss.str().c_str(), "Necromancer - Unhandled Exception", MB_OK | MB_ICONERROR | MB_SYSTEMMODAL);
+		break;
+	}
+
+	return EXCEPTION_EXECUTE_HANDLER;
 }
 
 void CCrashHandler::Initialize()
 {
-    if (s_Initialized)
-        return;
+	if (s_Initialized)
+		return;
 
-    QuickLog("CrashHandler initialized");
-    
-    // Add vectored exception handler (first chance)
-    AddVectoredExceptionHandler(1, VectoredExceptionHandler);
-    
-    s_PreviousFilter = SetUnhandledExceptionFilter(ExceptionFilter);
-    s_Initialized = true;
+	s_pVectoredHandle = AddVectoredExceptionHandler(1, ExceptionFilter);
+	s_Initialized = true;
 }
 
 void CCrashHandler::Shutdown()
 {
-    if (!s_Initialized)
-        return;
+	if (!s_Initialized)
+		return;
 
-    SetUnhandledExceptionFilter(s_PreviousFilter);
-    s_Initialized = false;
-}
-
-std::string CCrashHandler::GetExceptionCodeString(DWORD code)
-{
-    switch (code)
-    {
-    case EXCEPTION_ACCESS_VIOLATION:         return "EXCEPTION_ACCESS_VIOLATION";
-    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:    return "EXCEPTION_ARRAY_BOUNDS_EXCEEDED";
-    case EXCEPTION_BREAKPOINT:               return "EXCEPTION_BREAKPOINT";
-    case EXCEPTION_DATATYPE_MISALIGNMENT:    return "EXCEPTION_DATATYPE_MISALIGNMENT";
-    case EXCEPTION_FLT_DENORMAL_OPERAND:     return "EXCEPTION_FLT_DENORMAL_OPERAND";
-    case EXCEPTION_FLT_DIVIDE_BY_ZERO:       return "EXCEPTION_FLT_DIVIDE_BY_ZERO";
-    case EXCEPTION_FLT_INEXACT_RESULT:       return "EXCEPTION_FLT_INEXACT_RESULT";
-    case EXCEPTION_FLT_INVALID_OPERATION:    return "EXCEPTION_FLT_INVALID_OPERATION";
-    case EXCEPTION_FLT_OVERFLOW:             return "EXCEPTION_FLT_OVERFLOW";
-    case EXCEPTION_FLT_STACK_CHECK:          return "EXCEPTION_FLT_STACK_CHECK";
-    case EXCEPTION_FLT_UNDERFLOW:            return "EXCEPTION_FLT_UNDERFLOW";
-    case EXCEPTION_ILLEGAL_INSTRUCTION:      return "EXCEPTION_ILLEGAL_INSTRUCTION";
-    case EXCEPTION_IN_PAGE_ERROR:            return "EXCEPTION_IN_PAGE_ERROR";
-    case EXCEPTION_INT_DIVIDE_BY_ZERO:       return "EXCEPTION_INT_DIVIDE_BY_ZERO";
-    case EXCEPTION_INT_OVERFLOW:             return "EXCEPTION_INT_OVERFLOW";
-    case EXCEPTION_INVALID_DISPOSITION:      return "EXCEPTION_INVALID_DISPOSITION";
-    case EXCEPTION_NONCONTINUABLE_EXCEPTION: return "EXCEPTION_NONCONTINUABLE_EXCEPTION";
-    case EXCEPTION_PRIV_INSTRUCTION:         return "EXCEPTION_PRIV_INSTRUCTION";
-    case EXCEPTION_SINGLE_STEP:              return "EXCEPTION_SINGLE_STEP";
-    case EXCEPTION_STACK_OVERFLOW:           return "EXCEPTION_STACK_OVERFLOW";
-    default:                                 return "UNKNOWN_EXCEPTION";
-    }
-}
-
-std::vector<StackFrame> CCrashHandler::CaptureStackTrace(CONTEXT* context)
-{
-    std::vector<StackFrame> frames;
-    
-    HANDLE hProcess = GetCurrentProcess();
-    HANDLE hThread = GetCurrentThread();
-    
-    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
-    SymInitialize(hProcess, nullptr, TRUE);
-
-    STACKFRAME64 stackFrame = {};
-    DWORD machineType;
-
-#ifdef _M_X64
-    machineType = IMAGE_FILE_MACHINE_AMD64;
-    stackFrame.AddrPC.Offset = context->Rip;
-    stackFrame.AddrPC.Mode = AddrModeFlat;
-    stackFrame.AddrFrame.Offset = context->Rbp;
-    stackFrame.AddrFrame.Mode = AddrModeFlat;
-    stackFrame.AddrStack.Offset = context->Rsp;
-    stackFrame.AddrStack.Mode = AddrModeFlat;
-#else
-    machineType = IMAGE_FILE_MACHINE_I386;
-    stackFrame.AddrPC.Offset = context->Eip;
-    stackFrame.AddrPC.Mode = AddrModeFlat;
-    stackFrame.AddrFrame.Offset = context->Ebp;
-    stackFrame.AddrFrame.Mode = AddrModeFlat;
-    stackFrame.AddrStack.Offset = context->Esp;
-    stackFrame.AddrStack.Mode = AddrModeFlat;
-#endif
-
-    const int maxFrames = 64;
-    for (int i = 0; i < maxFrames; i++)
-    {
-        if (!StackWalk64(machineType, hProcess, hThread, &stackFrame, context,
-            nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr))
-            break;
-
-        if (stackFrame.AddrPC.Offset == 0)
-            break;
-
-        StackFrame frame = {};
-        frame.Address = stackFrame.AddrPC.Offset;
-
-        HMODULE hModule = nullptr;
-        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCSTR>(frame.Address), &hModule);
-        
-        if (hModule)
-        {
-            char modulePath[MAX_PATH] = {};
-            GetModuleFileNameA(hModule, modulePath, MAX_PATH);
-            
-            std::string fullPath(modulePath);
-            size_t pos = fullPath.find_last_of("\\/");
-            frame.ModuleName = (pos != std::string::npos) ? fullPath.substr(pos + 1) : fullPath;
-            frame.Offset = frame.Address - reinterpret_cast<DWORD64>(hModule);
-        }
-        else
-        {
-            frame.ModuleName = "Unknown";
-            frame.Offset = 0;
-        }
-
-        char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)] = {};
-        PSYMBOL_INFO symbol = reinterpret_cast<PSYMBOL_INFO>(symbolBuffer);
-        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-        symbol->MaxNameLen = MAX_SYM_NAME;
-
-        DWORD64 displacement = 0;
-        if (SymFromAddr(hProcess, frame.Address, &displacement, symbol))
-        {
-            frame.FunctionName = symbol->Name;
-        }
-        else
-        {
-            frame.FunctionName = "Unknown";
-        }
-
-        frames.push_back(frame);
-    }
-
-    SymCleanup(hProcess);
-    return frames;
-}
-
-std::string CCrashHandler::GetModuleInfo()
-{
-    std::stringstream ss;
-    ss << "=== Loaded Modules ===\n";
-
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
-    if (hSnapshot == INVALID_HANDLE_VALUE)
-        return ss.str();
-
-    MODULEENTRY32W me32 = {};
-    me32.dwSize = sizeof(MODULEENTRY32W);
-
-    if (Module32FirstW(hSnapshot, &me32))
-    {
-        do
-        {
-            char moduleName[MAX_PATH] = {};
-            WideCharToMultiByte(CP_UTF8, 0, me32.szModule, -1, moduleName, MAX_PATH, nullptr, nullptr);
-            
-            ss << std::hex << std::uppercase << std::setfill('0');
-            ss << "  " << std::setw(sizeof(void*) * 2) << reinterpret_cast<DWORD_PTR>(me32.modBaseAddr);
-            ss << " - " << std::setw(sizeof(void*) * 2) << reinterpret_cast<DWORD_PTR>(me32.modBaseAddr + me32.modBaseSize);
-            ss << std::dec << " | " << moduleName << "\n";
-        } while (Module32NextW(hSnapshot, &me32));
-    }
-
-    CloseHandle(hSnapshot);
-    return ss.str();
-}
-
-std::string CCrashHandler::GetSysInfo()
-{
-    std::stringstream ss;
-    ss << "=== System Info ===\n";
-
-    OSVERSIONINFOEXW osvi = {};
-    osvi.dwOSVersionInfoSize = sizeof(osvi);
-    
-    typedef NTSTATUS(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-    if (hNtdll)
-    {
-        auto RtlGetVersion = reinterpret_cast<RtlGetVersionPtr>(GetProcAddress(hNtdll, "RtlGetVersion"));
-        if (RtlGetVersion)
-        {
-            RtlGetVersion(reinterpret_cast<PRTL_OSVERSIONINFOW>(&osvi));
-            ss << "  Windows Version: " << osvi.dwMajorVersion << "." << osvi.dwMinorVersion 
-               << " (Build " << osvi.dwBuildNumber << ")\n";
-        }
-    }
-
-    SYSTEM_INFO sysInfo = {};
-    ::GetSystemInfo(&sysInfo);
-    ss << "  Processor Architecture: ";
-    switch (sysInfo.wProcessorArchitecture)
-    {
-    case PROCESSOR_ARCHITECTURE_AMD64: ss << "x64"; break;
-    case PROCESSOR_ARCHITECTURE_INTEL: ss << "x86"; break;
-    default: ss << "Unknown"; break;
-    }
-    ss << "\n";
-    ss << "  Number of Processors: " << sysInfo.dwNumberOfProcessors << "\n";
-
-    MEMORYSTATUSEX memStatus = {};
-    memStatus.dwLength = sizeof(memStatus);
-    if (GlobalMemoryStatusEx(&memStatus))
-    {
-        ss << "  Total Physical Memory: " << (memStatus.ullTotalPhys / (1024 * 1024)) << " MB\n";
-        ss << "  Available Physical Memory: " << (memStatus.ullAvailPhys / (1024 * 1024)) << " MB\n";
-    }
-
-    return ss.str();
-}
-
-std::string CCrashHandler::FormatCrashReport(EXCEPTION_POINTERS* pExceptionInfo)
-{
-    std::stringstream ss;
-    
-    auto now = std::time(nullptr);
-    tm timeInfo = {};
-    localtime_s(&timeInfo, &now);
-    ss << "=== CRASH REPORT ===\n";
-    ss << "Timestamp: " << std::put_time(&timeInfo, "%Y-%m-%d %H:%M:%S") << "\n\n";
-
-    ss << "=== Exception Info ===\n";
-    DWORD exceptionCode = pExceptionInfo->ExceptionRecord->ExceptionCode;
-    ss << "  Exception Code: 0x" << std::hex << std::uppercase << exceptionCode << std::dec;
-    ss << " (" << GetExceptionCodeString(exceptionCode) << ")\n";
-    ss << "  Exception Address: 0x" << std::hex << std::uppercase 
-       << reinterpret_cast<DWORD_PTR>(pExceptionInfo->ExceptionRecord->ExceptionAddress) << std::dec << "\n";
-
-    if (exceptionCode == EXCEPTION_ACCESS_VIOLATION && pExceptionInfo->ExceptionRecord->NumberParameters >= 2)
-    {
-        ULONG_PTR accessType = pExceptionInfo->ExceptionRecord->ExceptionInformation[0];
-        ULONG_PTR targetAddr = pExceptionInfo->ExceptionRecord->ExceptionInformation[1];
-        ss << "  Access Type: " << (accessType == 0 ? "Read" : (accessType == 1 ? "Write" : "Execute")) << "\n";
-        ss << "  Target Address: 0x" << std::hex << std::uppercase << targetAddr << std::dec << "\n";
-    }
-    ss << "\n";
-
-    ss << "=== Register State ===\n";
-    CONTEXT* ctx = pExceptionInfo->ContextRecord;
-#ifdef _M_X64
-    ss << std::hex << std::uppercase << std::setfill('0');
-    ss << "  RAX: " << std::setw(16) << ctx->Rax << "  RBX: " << std::setw(16) << ctx->Rbx << "\n";
-    ss << "  RCX: " << std::setw(16) << ctx->Rcx << "  RDX: " << std::setw(16) << ctx->Rdx << "\n";
-    ss << "  RSI: " << std::setw(16) << ctx->Rsi << "  RDI: " << std::setw(16) << ctx->Rdi << "\n";
-    ss << "  RBP: " << std::setw(16) << ctx->Rbp << "  RSP: " << std::setw(16) << ctx->Rsp << "\n";
-    ss << "  R8:  " << std::setw(16) << ctx->R8  << "  R9:  " << std::setw(16) << ctx->R9  << "\n";
-    ss << "  R10: " << std::setw(16) << ctx->R10 << "  R11: " << std::setw(16) << ctx->R11 << "\n";
-    ss << "  R12: " << std::setw(16) << ctx->R12 << "  R13: " << std::setw(16) << ctx->R13 << "\n";
-    ss << "  R14: " << std::setw(16) << ctx->R14 << "  R15: " << std::setw(16) << ctx->R15 << "\n";
-    ss << "  RIP: " << std::setw(16) << ctx->Rip << "  EFLAGS: " << std::setw(8) << ctx->EFlags << "\n";
-#else
-    ss << std::hex << std::uppercase << std::setfill('0');
-    ss << "  EAX: " << std::setw(8) << ctx->Eax << "  EBX: " << std::setw(8) << ctx->Ebx << "\n";
-    ss << "  ECX: " << std::setw(8) << ctx->Ecx << "  EDX: " << std::setw(8) << ctx->Edx << "\n";
-    ss << "  ESI: " << std::setw(8) << ctx->Esi << "  EDI: " << std::setw(8) << ctx->Edi << "\n";
-    ss << "  EBP: " << std::setw(8) << ctx->Ebp << "  ESP: " << std::setw(8) << ctx->Esp << "\n";
-    ss << "  EIP: " << std::setw(8) << ctx->Eip << "  EFLAGS: " << std::setw(8) << ctx->EFlags << "\n";
-#endif
-    ss << std::dec << "\n";
-
-    ss << "=== Stack Trace ===\n";
-    CONTEXT ctxCopy = *ctx;
-    auto frames = CaptureStackTrace(&ctxCopy);
-    for (size_t i = 0; i < frames.size(); i++)
-    {
-        const auto& frame = frames[i];
-        ss << "  [" << std::setw(2) << i << "] ";
-        ss << std::hex << std::uppercase << std::setfill('0');
-        ss << std::setw(sizeof(void*) * 2) << frame.Address << std::dec;
-        ss << " | " << frame.ModuleName << "!" << frame.FunctionName;
-        ss << " + 0x" << std::hex << frame.Offset << std::dec << "\n";
-    }
-    ss << "\n";
-
-    ss << GetModuleInfo() << "\n";
-    ss << GetSysInfo();
-
-    return ss.str();
-}
-
-void CCrashHandler::WriteCrashLog(const std::string& report)
-{
-    CreateDirectoryA("C:\\necromancer_tf2", nullptr);
-    CreateDirectoryA("C:\\necromancer_tf2\\crashlog", nullptr);
-
-    std::ofstream file("C:\\necromancer_tf2\\crashlog\\crashlog.txt", std::ios::out | std::ios::trunc);
-    if (file.is_open())
-    {
-        file << report;
-        file.close();
-    }
-}
-
-void CCrashHandler::ShowCrashDialog(const std::string& report)
-{
-    std::string title = "Necromancer - Crash Report";
-    std::string message = "The application has crashed. Please send this report to the developers.\n\n"
-                          "A crash log has been saved to C:\\necromancer_tf2\\crashlog\\crashlog.txt\n\n"
-                          "Click OK to copy the report to clipboard and exit.";
-
-    int result = MessageBoxA(nullptr, message.c_str(), title.c_str(), MB_OKCANCEL | MB_ICONERROR | MB_SYSTEMMODAL);
-    
-    if (result == IDOK)
-    {
-        if (OpenClipboard(nullptr))
-        {
-            EmptyClipboard();
-            
-            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, report.size() + 1);
-            if (hMem)
-            {
-                char* pMem = static_cast<char*>(GlobalLock(hMem));
-                if (pMem)
-                {
-                    memcpy(pMem, report.c_str(), report.size() + 1);
-                    GlobalUnlock(hMem);
-                    SetClipboardData(CF_TEXT, hMem);
-                }
-            }
-            
-            CloseClipboard();
-        }
-    }
-
-    std::string truncatedReport = report;
-    if (truncatedReport.length() > 4000)
-    {
-        truncatedReport = truncatedReport.substr(0, 4000) + "\n\n[... truncated, see full log at C:\\necromancer_tf2\\crashlog\\crashlog.txt ...]";
-    }
-    
-    MessageBoxA(nullptr, truncatedReport.c_str(), "Crash Details", MB_OK | MB_ICONERROR | MB_SYSTEMMODAL);
-}
-
-LONG WINAPI CCrashHandler::ExceptionFilter(EXCEPTION_POINTERS* pExceptionInfo)
-{
-    QuickLog("ExceptionFilter called");
-    
-    if (pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT)
-    {
-        QuickLog("Breakpoint exception, continuing search");
-        if (s_PreviousFilter)
-            return s_PreviousFilter(pExceptionInfo);
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
-    QuickLog("Generating crash report...");
-    std::string report = FormatCrashReport(pExceptionInfo);
-    
-    QuickLog("Writing crash log...");
-    WriteCrashLog(report);
-    
-    QuickLog("Showing crash dialog...");
-    ShowCrashDialog(report);
-
-    if (s_PreviousFilter)
-        return s_PreviousFilter(pExceptionInfo);
-
-    return EXCEPTION_EXECUTE_HANDLER;
+	if (s_pVectoredHandle)
+	{
+		RemoveVectoredExceptionHandler(s_pVectoredHandle);
+		s_pVectoredHandle = nullptr;
+	}
+	s_Initialized = false;
 }

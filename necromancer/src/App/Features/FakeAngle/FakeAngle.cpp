@@ -367,7 +367,7 @@ void CFakeAngle::FakeShotAngles(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUs
 	if (CFG::Misc_AntiCheat_Enabled)
 		return;
 	
-	if (!pWeapon)
+	if (!pWeapon || !H::Entities->IsEntityValid(pWeapon))
 		return;
 	
 	// Don't apply to medigun or laser pointer
@@ -483,7 +483,9 @@ void CFakeAngle::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon
 	}
 	
 	// Fix movement and apply angles
-	H::AimUtils->FixMovement(pCmd, vOriginalAngles, Vec3{ vAngles.x, vAngles.y, 0.0f });
+	// Use current cmd angles as the "from" angle (may be aimbot angles, not original)
+	// This preserves movement correction done by aimbot instead of undoing it
+	H::AimUtils->FixMovement(pCmd, pCmd->viewangles, Vec3{ vAngles.x, vAngles.y, 0.0f });
 	pCmd->viewangles.x = vAngles.x;
 	pCmd->viewangles.y = vAngles.y;
 	

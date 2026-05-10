@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../../Utils/Memory/Memory.h"
+
 #define FLOW_OUTGOING 0		
 #define FLOW_INCOMING 1
 #define MAX_FLOWS 2
@@ -31,8 +33,18 @@ public:
 	virtual float GetTimeConnected(void) const = 0;
 	virtual int GetBufferSize(void) const = 0;
 	virtual int GetDataRate(void) const = 0;
-	virtual bool IsLoopback(void) const = 0;
-	virtual bool IsTimingOut(void) const = 0;
+	virtual bool IsLoopbackWrong(void) const = 0;
+	// vfunc-based IsLoopback - uses hardcoded vtable index for reliability
+	bool IsLoopback()
+	{
+		return Memory::get_vfunc<bool(__thiscall*)(void*)>(this, 6)(this);
+	}
+	virtual bool IsTimingOutWrong(void) const = 0;
+	// vfunc-based IsTimingOut - uses hardcoded vtable index for reliability
+	bool IsTimingOut()
+	{
+		return Memory::get_vfunc<bool(__thiscall*)(void*)>(this, 7)(this);
+	}
 	virtual bool IsPlayback(void) const = 0;
 	virtual float GetLatency(int flow) const = 0;
 	virtual float GetAvgLatency(int flow) const = 0;

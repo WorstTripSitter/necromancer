@@ -8,7 +8,8 @@ MAKE_HOOK(CBaseEntity_InterpolateServerEntities, Signatures::CBaseEntity_Interpo
 	void* ecx)
 {
 	// Disable extrapolation if Disable Interp is on
-	if (CFG::Misc_Accuracy_Improvements && CFG::Visuals_Disable_Interp)
+	// Don't modify during connection — breaks signon
+	if (CFG::Misc_Accuracy_Improvements && CFG::Visuals_Disable_Interp && I::EngineClient->IsInGame())
 	{
 		static auto cl_extrapolate = I::CVar->FindVar("cl_extrapolate");
 

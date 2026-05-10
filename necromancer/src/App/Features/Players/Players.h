@@ -11,6 +11,7 @@ struct PlayerPriority
 	bool Targeted{};   // Same priority as Cheater for fakelag
 	bool Streamer{};   // Same priority as RetardLegit for fakelag
 	bool Nigger{};     // Same priority as Cheater for fakelag
+	bool FollowPlayer{}; // NavBot will follow this player when NavBot_FollowTaggedPlayers is enabled
 };
 
 struct PlayerStats
@@ -51,6 +52,7 @@ public:
 	void Mark(int entindex, const PlayerPriority& info);
 	bool GetInfo(int entindex, PlayerPriority& out);
 	bool GetInfoGUID(const std::string& guid, PlayerPriority& out);
+	void ClearAllFollowPlayer();
 	
 	// Stats tracking
 	void RecordEncounter(uint64_t steamID64);

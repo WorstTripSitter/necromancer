@@ -345,16 +345,7 @@ bool CAmalgamProjectileSimulation::Initialize(ProjectileInfo& tProjInfo, bool bS
 	
 	// Check interfaces
 	if (!I::Physics || !I::PhysicsCollision)
-	{
-		static bool bWarned = false;
-		if (!bWarned)
-		{
-			I::CVar->ConsoleColorPrintf({ 255, 0, 0, 255 }, "[PROJSIM] Physics interfaces not initialized! Physics=%p, Collision=%p\n", 
-				I::Physics, I::PhysicsCollision);
-			bWarned = true;
-		}
 		return false;
-	}
 
 	if (!m_pEnv)
 		m_pEnv = I::Physics->CreateEnvironment();

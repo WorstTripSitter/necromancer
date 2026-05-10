@@ -182,44 +182,45 @@ bool CESP::GetDrawBounds(C_BaseEntity* pEntity, int& x, int& y, int& w, int& h)
 
 void CESP::DrawBones(C_TFPlayer* pPlayer, Color_t color)
 {
-	auto MatrixPosition = [](const matrix3x4_t& matrix, Vector& position)
-	{
-		position[0] = matrix[0][3];
-		position[1] = matrix[1][3];
-		position[2] = matrix[2][3];
-	};
-
 	const model_t* pModel = pPlayer->GetModel();
-
 	if (!pModel)
 		return;
 
 	const studiohdr_t* pStudioHdr = I::ModelInfoClient->GetStudiomodel(pModel);
-
 	if (!pStudioHdr)
 		return;
 
-	matrix3x4_t boneMatrix[MAXSTUDIOBONES];
-
-	if (!pPlayer->SetupBones(boneMatrix, MAXSTUDIOBONES, BONE_USED_BY_HITBOX, I::GlobalVars->curtime))
+	// Use cached bone data instead of calling SetupBones (saves ~6KB stack alloc + full bone computation per player per frame)
+	const auto pCachedBoneData = pPlayer->GetCachedBoneData();
+	if (!pCachedBoneData || pCachedBoneData->Count() <= 0 || !pCachedBoneData->Base())
 		return;
+
+	const matrix3x4_t* pBoneMatrix = pCachedBoneData->Base();
+	const int nBoneCount = std::min(pCachedBoneData->Count(), MAXSTUDIOBONES);
 
 	Vec3 p1 = {}, p2 = {};
 	Vec3 p1s = {}, p2s = {};
 
-	for (int n = 0; n < pStudioHdr->numbones; n++)
+	for (int n = 0; n < pStudioHdr->numbones && n < nBoneCount; n++)
 	{
 		const mstudiobone_t* pBone = pStudioHdr->pBone(n);
 
 		if (!pBone || pBone->parent == -1 || !(pBone->flags & BONE_USED_BY_HITBOX))
 			continue;
 
-		MatrixPosition(boneMatrix[n], p1);
+		p1.x = pBoneMatrix[n][0][3];
+		p1.y = pBoneMatrix[n][1][3];
+		p1.z = pBoneMatrix[n][2][3];
 
 		if (!H::Draw->W2S(p1, p1s))
 			continue;
 
-		MatrixPosition(boneMatrix[pBone->parent], p2);
+		if (pBone->parent >= nBoneCount)
+			continue;
+
+		p2.x = pBoneMatrix[pBone->parent][0][3];
+		p2.y = pBoneMatrix[pBone->parent][1][3];
+		p2.z = pBoneMatrix[pBone->parent][2][3];
 
 		if (!H::Draw->W2S(p2, p2s))
 			continue;
@@ -250,6 +251,20 @@ void CESP::Run()
 
 	float flOriginalAlpha = I::MatSystemSurface->DrawGetAlphaMultiplier();
 
+	// Cache screen dimensions and tracer origin for all ESP sections
+	const int nScreenW = H::Draw->GetScreenW();
+	const int nScreenH = H::Draw->GetScreenH();
+	const int nScreenCenterX = nScreenW / 2;
+	const int nScreenCenterY = nScreenH / 2;
+	int nTracerFromY;
+	switch (CFG::ESP_Tracer_From)
+	{
+	case 0: nTracerFromY = 0; break;
+	case 1: nTracerFromY = nScreenCenterY; break;
+	case 2: nTracerFromY = nScreenH; break;
+	default: nTracerFromY = 0; break;
+	}
+
 	if (CFG::ESP_Players_Active)
 	{
 		I::MatSystemSurface->DrawSetAlphaMultiplier(CFG::ESP_Players_Alpha);
@@ -260,10 +275,6 @@ void CESP::Run()
 		// =====================================================================
 		const int nLocalTeam = pLocal->m_iTeamNum();
 		const bool bThirdPerson = I::Input->CAM_IsThirdPerson();
-		const int nScreenW = H::Draw->GetScreenW();
-		const int nScreenH = H::Draw->GetScreenH();
-		const int nScreenCenterX = nScreenW / 2;
-		const int nScreenCenterY = nScreenH / 2;
 
 		// Cache font references ONCE - H::Fonts->Get() is expensive
 		const auto& fontSmall = H::Fonts->Get(EFonts::ESP_SMALL);
@@ -411,15 +422,6 @@ void CESP::Run()
 			{
 				if (!bIsLocal)
 				{
-					int nFromY;
-					switch (CFG::ESP_Tracer_From)
-					{
-					case 0: nFromY = 0; break;
-					case 1: nFromY = nScreenCenterY; break;
-					case 2: nFromY = nScreenH; break;
-					default: nFromY = 0; break;
-					}
-
 					int nToY;
 					switch (CFG::ESP_Tracer_To)
 					{
@@ -429,7 +431,7 @@ void CESP::Run()
 					default: nToY = 0; break;
 					}
 
-					H::Draw->Line(nScreenCenterX, nFromY, xCenter, nToY, entColor);
+					H::Draw->Line(nScreenCenterX, nTracerFromY, xCenter, nToY, entColor);
 				}
 			}
 
@@ -806,32 +808,7 @@ void CESP::Run()
 				}
 			}
 
-			// Behavior Debug - EXPENSIVE, simplified version
-			if (CFG::ESP_Players_Behavior_Debug && !bIsLocal)
-			{
-				auto* pBehavior = F::MovementSimulation->GetPlayerBehavior(nPlayerIndex);
-
-				if (pBehavior && pBehavior->m_nSampleCount > 0)
-				{
-					int drawY = y - nFontCondsTall - SPACING_Y;
-
-					if (CFG::ESP_Players_Name)
-						drawY -= nFontCondsTall + SPACING_Y;
-					if (CFG::ESP_Players_Tags)
-						drawY -= (nFontCondsTall + SPACING_Y) * 2;
-
-					float flConfidence = pBehavior->GetConfidence();
-					Color_t confColor;
-					if (flConfidence < 0.5f)
-						confColor = { 255, static_cast<unsigned char>(flConfidence * 2.0f * 255), 0, 255 };
-					else
-						confColor = { static_cast<unsigned char>((1.0f - (flConfidence - 0.5f) * 2.0f) * 255), 255, 0, 255 };
-
-					// Only show confidence line - the rest is too expensive
-					H::Draw->String(fontConds, xCenter, drawY, confColor, POS_CENTERX,
-						"Conf: %.0f%% [%d]", flConfidence * 100.0f, pBehavior->m_nSampleCount);
-				}
-			}
+			// Behavior debug removed with behavior system removal
 		}
 	}
 
@@ -892,29 +869,16 @@ void CESP::Run()
 
 			if (CFG::ESP_Buildings_Tracer)
 			{
-				auto nFromY = [&]() -> int
+				int nToY;
+				switch (CFG::ESP_Tracer_To)
 				{
-					switch (CFG::ESP_Tracer_From)
-					{
-					case 0: return 0;
-					case 1: return H::Draw->GetScreenH() / 2;
-					case 2: return H::Draw->GetScreenH();
-					default: return 0;
-					}
-				};
+				case 0: nToY = y; break;
+				case 1: nToY = y + (h / 2); break;
+				case 2: nToY = y + h; break;
+				default: nToY = 0; break;
+				}
 
-				auto nToY = [&]() -> int
-				{
-					switch (CFG::ESP_Tracer_To)
-					{
-					case 0: return y;
-					case 1: return y + (h / 2);
-					case 2: return y + h;
-					default: return 0;
-					}
-				};
-
-				H::Draw->Line(H::Draw->GetScreenW() / 2, nFromY(), x + (w / 2), nToY(), entColor);
+				H::Draw->Line(nScreenCenterX, nTracerFromY, x + (w / 2), nToY, entColor);
 			}
 
 			if (CFG::ESP_Buildings_Name)
@@ -1054,29 +1018,16 @@ void CESP::Run()
 
 				if (CFG::ESP_World_Tracer)
 				{
-					auto nFromY = [&]() -> int
+					int nToY;
+					switch (CFG::ESP_Tracer_To)
 					{
-						switch (CFG::ESP_Tracer_From)
-						{
-						case 0: return 0;
-						case 1: return H::Draw->GetScreenH() / 2;
-						case 2: return H::Draw->GetScreenH();
-						default: return 0;
-						}
-					};
+					case 0: nToY = y; break;
+					case 1: nToY = y + (h / 2); break;
+					case 2: nToY = y + h; break;
+					default: nToY = 0; break;
+					}
 
-					auto nToY = [&]() -> int
-					{
-						switch (CFG::ESP_Tracer_To)
-						{
-						case 0: return y;
-						case 1: return y + (h / 2);
-						case 2: return y + h;
-						default: return 0;
-						}
-					};
-
-					H::Draw->Line(H::Draw->GetScreenW() / 2, nFromY(), x + (w / 2), nToY(), color);
+					H::Draw->Line(nScreenCenterX, nTracerFromY, x + (w / 2), nToY, color);
 				}
 
 				if (CFG::ESP_World_Name)
@@ -1111,29 +1062,16 @@ void CESP::Run()
 
 				if (CFG::ESP_World_Tracer)
 				{
-					auto nFromY = [&]() -> int
+					int nToY;
+					switch (CFG::ESP_Tracer_To)
 					{
-						switch (CFG::ESP_Tracer_From)
-						{
-						case 0: return 0;
-						case 1: return H::Draw->GetScreenH() / 2;
-						case 2: return H::Draw->GetScreenH();
-						default: return 0;
-						}
-					};
+					case 0: nToY = y; break;
+					case 1: nToY = y + (h / 2); break;
+					case 2: nToY = y + h; break;
+					default: nToY = 0; break;
+					}
 
-					auto nToY = [&]() -> int
-					{
-						switch (CFG::ESP_Tracer_To)
-						{
-						case 0: return y;
-						case 1: return y + (h / 2);
-						case 2: return y + h;
-						default: return 0;
-						}
-					};
-
-					H::Draw->Line(H::Draw->GetScreenW() / 2, nFromY(), x + (w / 2), nToY(), color);
+					H::Draw->Line(nScreenCenterX, nTracerFromY, x + (w / 2), nToY, color);
 				}
 
 				if (CFG::ESP_World_Name)
@@ -1189,29 +1127,16 @@ void CESP::Run()
 
 				if (CFG::ESP_World_Tracer)
 				{
-					auto nFromY = [&]() -> int
+					int nToY;
+					switch (CFG::ESP_Tracer_To)
 					{
-						switch (CFG::ESP_Tracer_From)
-						{
-						case 0: return 0;
-						case 1: return H::Draw->GetScreenH() / 2;
-						case 2: return H::Draw->GetScreenH();
-						default: return 0;
-						}
-					};
+					case 0: nToY = y; break;
+					case 1: nToY = y + (h / 2); break;
+					case 2: nToY = y + h; break;
+					default: nToY = 0; break;
+					}
 
-					auto nToY = [&]() -> int
-					{
-						switch (CFG::ESP_Tracer_To)
-						{
-						case 0: return y;
-						case 1: return y + (h / 2);
-						case 2: return y + h;
-						default: return 0;
-						}
-					};
-
-					H::Draw->Line(H::Draw->GetScreenW() / 2, nFromY(), x + (w / 2), nToY(), entColor);
+					H::Draw->Line(nScreenCenterX, nTracerFromY, x + (w / 2), nToY, entColor);
 				}
 
 				if (CFG::ESP_World_Name)
@@ -1246,29 +1171,16 @@ void CESP::Run()
 
 				if (CFG::ESP_World_Tracer)
 				{
-					auto nFromY = [&]() -> int
+					int nToY;
+					switch (CFG::ESP_Tracer_To)
 					{
-						switch (CFG::ESP_Tracer_From)
-						{
-						case 0: return 0;
-						case 1: return H::Draw->GetScreenH() / 2;
-						case 2: return H::Draw->GetScreenH();
-						default: return 0;
-						}
-					};
+					case 0: nToY = y; break;
+					case 1: nToY = y + (h / 2); break;
+					case 2: nToY = y + h; break;
+					default: nToY = 0; break;
+					}
 
-					auto nToY = [&]() -> int
-					{
-						switch (CFG::ESP_Tracer_To)
-						{
-						case 0: return y;
-						case 1: return y + (h / 2);
-						case 2: return y + h;
-						default: return 0;
-						}
-					};
-
-					H::Draw->Line(H::Draw->GetScreenW() / 2, nFromY(), x + (w / 2), nToY(), color);
+					H::Draw->Line(nScreenCenterX, nTracerFromY, x + (w / 2), nToY, color);
 				}
 
 				if (CFG::ESP_World_Name)
@@ -1303,29 +1215,16 @@ void CESP::Run()
 
 				if (CFG::ESP_World_Tracer)
 				{
-					auto nFromY = [&]() -> int
+					int nToY;
+					switch (CFG::ESP_Tracer_To)
 					{
-						switch (CFG::ESP_Tracer_From)
-						{
-						case 0: return 0;
-						case 1: return H::Draw->GetScreenH() / 2;
-						case 2: return H::Draw->GetScreenH();
-						default: return 0;
-						}
-					};
+					case 0: nToY = y; break;
+					case 1: nToY = y + (h / 2); break;
+					case 2: nToY = y + h; break;
+					default: nToY = 0; break;
+					}
 
-					auto nToY = [&]() -> int
-					{
-						switch (CFG::ESP_Tracer_To)
-						{
-						case 0: return y;
-						case 1: return y + (h / 2);
-						case 2: return y + h;
-						default: return 0;
-						}
-					};
-
-					H::Draw->Line(H::Draw->GetScreenW() / 2, nFromY(), x + (w / 2), nToY(), color);
+					H::Draw->Line(nScreenCenterX, nTracerFromY, x + (w / 2), nToY, color);
 				}
 
 				if (CFG::ESP_World_Name)
@@ -1355,7 +1254,7 @@ void CESP::Run()
 	DrawProjectileSimulation();
 }
 
-// Draw projectile simulation paths for debugging
+// Draw projectile simulation paths
 void CESP::DrawProjectileSimulation()
 {
 	if (!CFG::Visuals_Draw_Movement_Path_Style)

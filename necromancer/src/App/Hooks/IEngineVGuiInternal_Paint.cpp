@@ -3,6 +3,7 @@
 #include "../Features/Menu/Menu.h"
 #include "../CheaterDatabase/CheaterDatabase.h"
 #include "../Features/Chat/Chat.h"
+#include "../Features/CFG.h"
 
 #include "../Features/ESP/ESP.h"
 #include "../Features/Radar/Radar.h"
@@ -15,6 +16,7 @@
 #include "../Features/Aimbot/AimbotHitscan/AimbotHitscan.h"
 #include "../Features/Triggerbot/AutoSapper/AutoSapper.h"
 #include "../Features/ChatESP/ChatESP.h"
+#include "../Features/NavBot/NavBot.h"
 
 MAKE_HOOK(IEngineVGuiInternal_Paint, Memory::GetVFunc(I::EngineVGui, 14), void, __fastcall,
 	void* ecx, int mode)
@@ -36,20 +38,25 @@ MAKE_HOOK(IEngineVGuiInternal_Paint, Memory::GetVFunc(I::EngineVGui, 14), void, 
 			// Only draw entity-dependent stuff if in game
 			if (I::EngineClient && I::EngineClient->IsInGame())
 			{
-				F::ESP->Run();
-				F::AutoSapper->DrawESP();
-				F::TeamWellBeing->Run();
-				F::MiscVisuals->ShiftBar();
-				F::Radar->Run();
-				F::SpectatorList->Run();
-				F::MiscVisuals->AimbotFOVCircle();
-				F::MiscVisuals->CritIndicator();
-				F::AimbotHitscan->DrawSwitchIndicator();
-				F::SpyCamera->Run();
-				F::SpyWarning->Run();
-				F::SeedPred->Paint();
-				F::ChatESP->Think();
-				F::ChatESP->Draw();
+				// EXTREME: Skip ESP entirely — biggest rendering cost
+				if (!CFG::Perf_Extreme_Skip_ESP && !CFG::Perf_Extreme_Skip_All_Visuals)
+				{
+					F::ESP->Run();
+					F::AutoSapper->DrawESP();
+					F::TeamWellBeing->Run();
+					F::Radar->Run();
+					F::SpectatorList->Run();
+					F::MiscVisuals->AimbotFOVCircle();
+					F::MiscVisuals->CritIndicator();
+					F::MiscVisuals->ShiftBar();
+					F::AimbotHitscan->DrawSwitchIndicator();
+					F::SpyCamera->Run();
+					F::SpyWarning->Run();
+					F::SeedPred->Paint();
+					F::ChatESP->Think();
+					F::ChatESP->Draw();
+				}
+				g_NavBot.Draw();
 			}
 			F::Menu->Run();
 		}

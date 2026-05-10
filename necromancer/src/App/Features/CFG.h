@@ -18,12 +18,14 @@ namespace CFG
 	CFGVAR(Aimbot_Ignore_Invulnerable, true);
 	CFGVAR(Aimbot_Ignore_Taunting, false);
 	CFGVAR(Aimbot_Ignore_Stickies, false);
+	CFGVAR(Aimbot_Ignore_Vaccinator, false);
 
 	CFGVAR(Aimbot_Hitscan_Active, true);
 	CFGVAR(Aimbot_Hitscan_Target_LagRecords, true);
 	CFGVAR(Aimbot_Hitscan_Target_Stickies, true);
 	CFGVAR(Aimbot_Hitscan_Aim_Type, 1); //0 Normal 1 Silent 2 Smooth 3 Triggerbot
 	CFGVAR(Aimbot_Hitscan_Sort, 0); //0 FOV 1 Distance
+	CFGVAR(Aimbot_Hitscan_Sort_VisibleOnly, false); // When sorting by distance, only target visible enemies
 	CFGVAR(Aimbot_Hitscan_Hitbox, 2); //0 Head 1 Body 2 Auto 3 Switch
 	CFGVAR(Aimbot_Hitscan_Switch_Key, 0); // Key to toggle head/body for sniper/ambassador
 	CFGVAR(Aimbot_Hitscan_Switch_State, false); // false = Head, true = Body
@@ -41,6 +43,7 @@ namespace CFG
 	CFGVAR(Aimbot_Hitscan_Scan_Buildings, true);
 	CFGVAR(Aimbot_Hitscan_Advanced_Smooth_AutoShoot, true);
 	CFGVAR(Aimbot_Hitscan_Auto_Scope, false);
+	CFGVAR(Aimbot_Hitscan_Auto_Rev, false);
 	CFGVAR(Aimbot_Hitscan_Wait_For_Headshot, true);
 	CFGVAR(Aimbot_Hitscan_Wait_For_Charge, false);
 	CFGVAR(Aimbot_Hitscan_Minigun_TapFire, false);
@@ -131,11 +134,9 @@ namespace CFG
 	CFGVAR(Aimbot_Projectile_Double_Donk_Delay, 0.01f); // Fuse expire delay after impact (-0.1 to 0.4 seconds)
 	CFGVAR(Aimbot_Projectile_Cannon_Cancel_Charge, true); // Cancel Loose Cannon charge if target is lost
 
-	// Behavior-based prediction - uses learned player behavior to improve aim
-	CFGVAR(Aimbot_Projectile_Use_Dodge_Prediction, true); // Apply aim offset based on predicted dodge direction
-
 	CFGVAR(Aimbot_Melee_Active, true);
 	CFGVAR(Aimbot_Melee_Always_Active, false);
+	CFGVAR(Aimbot_Melee_Always_Crit, false); // Force crits when melee aimbot fires (not on manual swings)
 	CFGVAR(Aimbot_Melee_Target_LagRecords, true);
 	CFGVAR(Aimbot_Melee_Aim_Type, 1); //0 Normal 1 Silent 2 Smooth
 	CFGVAR(Aimbot_Melee_Sort, 0); //0 FOV 1 Distance
@@ -261,8 +262,6 @@ namespace CFG
 	CFGVAR(ESP_Players_Sniper_Lines, true);
 	CFGVAR(ESP_Players_Show_F2P, false); // Show F2P tag on players
 	CFGVAR(ESP_Players_Show_Party, false); // Show party indicator on players
-	CFGVAR(ESP_Players_Behavior_Debug, false); // Debug: Show movement simulation confidence and learned behavior
-
 	CFGVAR(ESP_Buildings_Active, true);
 	CFGVAR(ESP_Buildings_Alpha, 0.7f);
 	CFGVAR(ESP_Buildings_Ignore_Local, false);
@@ -402,6 +401,9 @@ namespace CFG
 	CFGVAR(Outlines_Players_Ignore_Tagged_Teammates, false); // When true, don't show outlines for tagged teammates (except medics if Show_Teammate_Medics is on)
 	CFGVAR(Outlines_Players_Show_Teammate_Medics, true);
 
+	CFGVAR(Outlines_LagRecords_Active, true);
+	CFGVAR(Outlines_LagRecords_Alpha, 1.0f);
+
 	CFGVAR(Outlines_Buildings_Active, true);
 	CFGVAR(Outlines_Buildings_Alpha, 1.0f);
 	CFGVAR(Outlines_Buildings_Ignore_Local, false);
@@ -520,8 +522,29 @@ namespace CFG
 	CFGVAR(Visuals_Disable_Dropped_Weapons, false);
 	CFGVAR(Visuals_Simple_Models, false);
 	CFGVAR(Visuals_Auto_Interp, true); // Auto interp based on weapon type
+	CFGVAR(Perf_Minimal_Entities, false); // Class-aware minimal entities: Pyro+flamethrower gets projectiles, Demo gets stickies, Engie+melee gets buildings, skips ammo packs
 	CFGVAR(Visuals_Particles_Mode, 0); //0 Original 1 Custom Color 2 Rainbow
 	CFGVAR(Visuals_Particles_Rainbow_Rate, 10.0f);
+
+	// EXTREME Performance — for bot hosting / headless scenarios where visuals don't matter
+	CFGVAR(Perf_Extreme_Skip_All_Visuals, false); // Skip ALL visual rendering (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_LagRecords_Teammates, false); // Don't store lag records for teammates (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_Anim_Updates, false); // Skip client-side animation updates (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_MovementSimulation, false); // Skip movement sim storage — WARNING: breaks projectile aimbot prediction (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_VelFix, false); // Skip velocity fix record storage (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_Outlines, false); // Skip outline rendering entirely (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_ESP, false); // Skip all ESP drawing (EXTREME)
+	CFGVAR(Perf_Extreme_Limit_Entity_Cache, false); // Only cache enemies + local weapon, skip buildings/projectiles/pickups (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_World_Render, false); // Don't render map geometry/skybox (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_Shadows, false); // Disable all shadow rendering (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_Particles, false); // Disable all particle systems (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_Decals, false); // Disable decal/bullet hole rendering (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_World_Textures, false); // Render world as wireframe instead of textured (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_Unused_Entities, false); // Don't render any entities at all (r_drawentities 0) — bot doesn't need to see (EXTREME)
+	CFGVAR(Perf_Extreme_Skip_Sound, false); // Mute all audio processing — saves CPU on sound mixing (EXTREME)
+	CFGVAR(Perf_Extreme_Minimal_Render, false); // Nuclear option: world skip + shadows + particles + decals + no sky + flat lighting (EXTREME)
+	CFGVAR(Perf_Extreme_FPS_Limit, 0); // Force fps_max to this value (0 = off, use for headless bot hosting) (EXTREME)
+	CFGVAR(Perf_Extreme_Low_Textures, false); // mat_picmip 2 — lowest texture quality, huge VRAM savings (EXTREME)
 
 	CFGVAR(Visuals_Beams_Active, false);
 	CFGVAR(Visuals_Beams_LifeTime, 2.0f);
@@ -575,6 +598,18 @@ namespace CFG
 
 	CFGVAR(Visuals_Weather, 0); // 0 = Off, 1 = Rain, 2 = Light Rain
 
+	// Killstreak Sheen Override
+	CFGVAR(Visuals_Sheen_Active, false); // Force-enable killstreak sheen on all weapons
+	CFGVAR(Visuals_Sheen_Local, true); // Apply sheen to local player's weapon
+	CFGVAR(Visuals_Sheen_Friend, false); // Apply sheen to Steam friends + ignored-tagged players
+	CFGVAR(Visuals_Sheen_Teammates, false); // Apply sheen to same-team players
+	CFGVAR(Visuals_Sheen_Enemy, false); // Apply sheen to enemy team players
+	CFGVAR(Visuals_Sheen_Index, 1); // Sheen type: 1=Red 2=Orange 3=Fire 4=Green 5=Cyan 6=Purple 7=Pink 8=Custom
+	CFGVAR(Visuals_Sheen_Rainbow, false); // Rainbow cycling sheen color
+	CFGVAR(Visuals_Sheen_Rainbow_Rate, 3.0f); // Rainbow cycle speed
+	CFGVAR(Visuals_Sheen_Interval, 5.0f); // Time between sheen animations (seconds)
+	CFGVAR(Visuals_Sheen_Intensity, 1.0f); // Color intensity/brightness multiplier
+
 	// Freecam
 	CFGVAR(Visuals_Freecam_Key, 0);
 	CFGVAR(Visuals_Freecam_Speed, 500.0f);
@@ -598,6 +633,10 @@ namespace CFG
 	CFGVAR(Misc_NoiseMaker_Spam, false);
 	CFGVAR(Misc_No_Push, false);
 	CFGVAR(Misc_MVM_Giant_Weapon_Sounds, false);
+	CFGVAR(Misc_Sound_Block_Footsteps, false);
+	CFGVAR(Misc_Sound_Block_Noisemaker, false);
+	CFGVAR(Misc_Sound_Block_FryingPan, false);
+	CFGVAR(Misc_Sound_Block_Water, false);
 	CFGVAR(Misc_Fake_Taunt, false);
 	CFGVAR(Misc_Ping_Reducer, true); // Network fix (input delay fix)
 	CFGVAR(Misc_Ping_Reducer_Active, false); // Enable ping reducer
@@ -632,9 +671,12 @@ namespace CFG
 	CFGVAR(Misc_Auto_Call_Medic_HP_Sniper, 70);
 	CFGVAR(Misc_Auto_Call_Medic_HP_Spy, 80);
 	CFGVAR(Misc_Auto_Call_Medic_HP_Medic, 100);
+	CFGVAR(Misc_Auto_VoiceCommand_Spam, false);
+	CFGVAR(Misc_Auto_VoiceCommand_Spam_Command, 0); // 0=Random, 1=Medic, 2=Thanks, 3=Nice Shot, 4=Cheers, 5=Jeers, 6=Go Go Go, 7=Move Up, 8=Go Left, 9=Go Right, 10=Yes, 11=No, 12=Incoming, 13=Spy, 14=Sentry Ahead, 15=Need Teleporter, 16=Pootis, 17=Need Sentry, 18=Activate Charge, 19=Help, 20=Battle Cry
 	CFGVAR(Misc_Auto_Medigun_Key, 0);
 	CFGVAR(Misc_Movement_Lock_Key, 0);
 	CFGVAR(Misc_Clean_Screenshot, true);
+	CFGVAR(Misc_Streamer_Mode, 0);  // 0=Off, 1=Local, 2=Friends, 3=Party, 4=All
 	CFGVAR(Misc_Backpack_Expander, true);
 
 	CFGVAR(Misc_AutoFaN_Key, 0);
@@ -645,6 +687,49 @@ namespace CFG
 	CFGVAR(Misc_AntiCheat_Enabled, false);
 	CFGVAR(Misc_AntiCheat_SkipCritDetection, false);
 	CFGVAR(Misc_AntiCheat_IgnoreTickLimit, false);
+
+	// Nav Bot
+	CFGVAR(NavBot_Enabled, false);
+	CFGVAR(NavBot_WanderWhenIdle, true);
+	CFGVAR(NavBot_CaptureObjectives, false);
+	CFGVAR(NavBot_AutoJump, true);
+	CFGVAR(NavBot_SafePathing, true);  // Adjust waypoints away from corners (like Amalgam's SafePathing)
+	CFGVAR(NavBot_RouteVariety, true);  // TF2 bot route variety — varies path preference over time so bot doesn't always take same route
+	CFGVAR(NavBot_DrawWaypoints, false);
+	CFGVAR(NavBot_SearchHealth, true);
+	CFGVAR(NavBot_SearchAmmo, true);
+	CFGVAR(NavBot_StuckThreshold, 15.0f);
+	CFGVAR(NavBot_TeleportThreshold, 300.0f);
+	CFGVAR(NavBot_DeathPause, false);           // Stop moving after death for a duration
+	CFGVAR(NavBot_DeathPauseDuration, 2.0f);    // Duration in seconds (0-5)
+	CFGVAR(NavBot_LookAtPath, true);
+	CFGVAR(NavBot_StalkEnemies, true);
+	CFGVAR(NavBot_SniperSpots, false);  // Move to navmesh sniper sightline spots when idle
+	CFGVAR(NavBot_LookSpeed, 6.0f);
+	CFGVAR(NavBot_EscapeDanger, true);
+	CFGVAR(NavBot_WaitForSetup, true);
+	CFGVAR(NavBot_SwitchWeapons, true);
+	CFGVAR(NavBot_FollowTeammates, false);
+	CFGVAR(NavBot_WeaponPreference, 1);  // 0=Off, 1=Best, 2=Primary, 3=Secondary, 4=Melee
+	CFGVAR(NavBot_AvoidMelee, false);   // When WeaponPreference=Best, don't choose melee
+	// Danger blacklist flags (ported from Amalgam's Blacklist dropdown - multi-select)
+	CFGVAR(NavBot_DangerBL_NormalThreats, true);	// Visible enemy players
+	CFGVAR(NavBot_DangerBL_DormantThreats, true);	// Dormant enemy last-known positions
+	CFGVAR(NavBot_DangerBL_Players, true);			// All player-related dangers (normal + dormant + invuln)
+	CFGVAR(NavBot_DangerBL_Stickies, true);			// Enemy sticky traps
+	CFGVAR(NavBot_DangerBL_Projectiles, true);		// Incoming rockets and pipes
+	CFGVAR(NavBot_DangerBL_Sentries, true);			// Enemy sentry guns
+	CFGVAR(NavBot_AutoJoinClass, 0);	// 0=Off, 1=Scout, 2=Sniper, 3=Soldier, 4=Demoman, 5=Medic, 6=Heavy, 7=Pyro, 8=Spy, 9=Engineer
+	CFGVAR(NavBot_AutoJoinTeam, 0);	// 0=Off, 1=Blue, 2=Red, 3=Spectator, 4=Random (Red or Blue only)
+	CFGVAR(NavBot_FollowTaggedPlayers, false); // Follow players tagged with "Follow Player" tag
+	CFGVAR(NavBot_FollowDistance, 200.0f); // Minimum distance to keep from followed player (prevents standing too close)
+	CFGVAR(NavBot_FollowSupplyDistance, 400.0f); // Max distance from followed player to go for health/ammo (0=unlimited)
+	CFGVAR(NavBot_IgnoreDispensers, false); // Skip dispensers when searching for health/ammo
+
+	// Auto Scope (ported from Amalgam's BotUtils::AutoScope)
+	CFGVAR(NavBot_AutoScope, 0);  // 0=Off, 1=Simple, 2=MoveSim
+	CFGVAR(NavBot_AutoScopeCancelTime, 3.0f);  // Seconds before auto-unscoping when no enemy visible
+	CFGVAR(NavBot_AutoScopeWaitAfterShot, 0.0f);  // Seconds to wait after firing before shooting again (sniper only, 0=off)
 
 	CFGVAR(Exploits_Shifting_Recharge_Key, 0);
 	CFGVAR(Exploits_Shifting_Recharge_Limit, 24); // 2-24, max ticks to recharge (accounts for fakeangle 2 ticks, anticheat)
@@ -664,10 +749,10 @@ namespace CFG
 	CFGVAR(Exploits_Warp_Mode, 1); //0 Slow 1 Full
 	CFGVAR(Exploits_Warp_Exploit, 0); //0 None 1 Fake Peek 2 0 Velocity
 	CFGVAR(Exploits_Shifting_Draw_Indicator, false);
-	CFGVAR(Exploits_Shifting_Indicator_Style, 0); //0 Rectangle 1 Circle
-	CFGVAR(Exploits_Shifting_FakeLag_Text_X, 16);
-	CFGVAR(Exploits_Shifting_FakeLag_Text_Y, 2);
-	CFGVAR(Exploits_Shifting_FakeLag_Text_Size, 100); // Percentage: 50-200
+	CFGVAR(Exploits_Shifting_Indicator_Pos_X, 801);
+	CFGVAR(Exploits_Shifting_Indicator_Pos_Y, 710);
+	CFGVAR(Exploits_Shifting_Indicator_Width, 140);
+	CFGVAR(Exploits_Shifting_Indicator_Height, 16);
 
 	CFGVAR(Exploits_FakeLag_Enabled, false);
 	CFGVAR(Exploits_FakeLag_Only_Moving, false);
@@ -715,10 +800,19 @@ namespace CFG
 	// Killsay
 	CFGVAR(Misc_Chat_Killsay_Active, false);
 	CFGVAR(Misc_Chat_Killsay_Tagged_Only, false);
+	
+	// Auto Math Solver
+	CFGVAR(Misc_Chat_AutoMath_Active, false);
+
+	// Vote on Cooldown Lifted (hidden unless ShowMoreOptions)
+	CFGVAR(Misc_Chat_VoteBanOnLifted, false);
+	CFGVAR(Misc_Chat_VoteMuteOnLifted, false);
 
 	CFGVAR(Misc_Freeze_Queue, false);
 	CFGVAR(Misc_Auto_Queue, false);
 	CFGVAR(Misc_Auto_Accept_Items, false);
+	CFGVAR(Misc_Auto_FastClassSwitch, false);
+	CFGVAR(Misc_Auto_Rejoin_On_Kick, false);
 	CFGVAR(Misc_Anti_AFK, true);
 
 	// Region Selector (Force Regions)
@@ -779,6 +873,7 @@ namespace CFG
 	CFGVAR(Color_Targeted, Color_t({ 255, 100, 0, 255 }));   // Orange for Targeted (same priority as Cheater)
 	CFGVAR(Color_Streamer, Color_t({ 138, 43, 226, 255 }));  // Purple for Streamer (same priority as RetardLegit)
 	CFGVAR(Color_Nigger, Color_t({ 139, 69, 19, 255 }));     // Brown for Nigger (same priority as Cheater)
+	CFGVAR(Color_FollowPlayer, Color_t({ 0, 255, 255, 255 })); // Cyan for Follow Player (NavBot follow tag)
 	CFGVAR(Color_F2P, Color_t({ 200, 200, 200, 255 })); // F2P player tag color
 	CFGVAR(Color_Custom_Name, Color_t({ 255, 255, 255, 255 })); // Custom name color for all players
 	CFGVAR(Color_FakeModel, Color_t({ 0, 204, 204, 255 })); // Cyan for fake model
@@ -812,6 +907,7 @@ namespace CFG
 	CFGVAR(Color_Hands_Sheen, Color_t({ 255, 255, 255, 255 }));
 	CFGVAR(Color_Weapon, Color_t({ 255, 255, 255, 255 }));
 	CFGVAR(Color_Weapon_Sheen, Color_t({ 255, 255, 255, 255 }));
+	CFGVAR(Color_Sheen_Tint, Color_t({ 255, 255, 255, 255 }));
 	CFGVAR(Color_Simulation_Movement, Color_t({ 255, 255, 255, 255 }));
 	CFGVAR(Color_Simulation_Projectile, Color_t({ 255, 255, 255, 255 }));
 	CFGVAR(Color_Trajectory, Color_t({ 255, 255, 255, 255 })); // Single trajectory color
@@ -870,6 +966,7 @@ namespace CFG
 	// Background image
 	CFGVAR(Menu_Background_Image_Enabled, false);
 	CFGVAR(Menu_Background_Image_Transparency, 0.5f);
+	CFGVAR(Menu_ShowMoreOptions, false);  // Show advanced/unnecessary options in menu
 
 	// Draggable GroupBox positions (column * 100 + order)
 	// Misc tab
@@ -880,6 +977,16 @@ namespace CFG
 	CFGVAR(Menu_GroupBox_Misc_Taunt, 103);   // Middle column, order 3
 	CFGVAR(Menu_GroupBox_Misc_Auto, 100);    // Middle column, order 0
 	CFGVAR(Menu_GroupBox_Misc_Movement, 0);  // Left column, order 0
+	CFGVAR(Menu_GroupBox_Misc_Sound, 104);   // Middle column, order 4
+
+	// NavBot tab
+	CFGVAR(Menu_GroupBox_NavBot_General, 0);      // Left column, order 0
+	CFGVAR(Menu_GroupBox_NavBot_Movement, 1);     // Left column, order 1
+	CFGVAR(Menu_GroupBox_NavBot_Preferences, 100); // Middle column, order 0
+	CFGVAR(Menu_GroupBox_NavBot_Debug, 200);       // Right column, order 0
+	CFGVAR(Menu_GroupBox_NavBot_Performance, 201); // Right column, order 1
+	CFGVAR(Menu_GroupBox_NavBot_Weapon, 101);        // Middle column, order 1 (under Preferences)
+	CFGVAR(Menu_GroupBox_NavBot_AutoScope, 102);    // Middle column, order 2 (under Weapon)
 
 	// Exploits tab
 	CFGVAR(Menu_GroupBox_Exploits_Shifting, 0);

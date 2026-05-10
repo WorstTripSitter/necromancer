@@ -5,6 +5,7 @@
 #include "../Features/NetworkFix/NetworkFix.h"
 #include "../Features/MiscVisuals/MiscVisuals.h"
 #include "../Features/ChatESP/ChatESP.h"
+#include "../Features/NavBot/NavEngine/NavEngine.h"
 
 MAKE_HOOK(IBaseClientDLL_LevelInitPostEntity, Memory::GetVFunc(I::BaseClientDLL, 6), void, __fastcall,
 	void* ecx)
@@ -25,6 +26,9 @@ MAKE_HOOK(IBaseClientDLL_LevelInitPostEntity, Memory::GetVFunc(I::BaseClientDLL,
 	
 	// Clear chat bubbles from previous map
 	F::ChatESP->OnLevelInit();
+
+	// Reset NavEngine on map change (reloads nav mesh for new map)
+	G_NavEngine.Reset(true);
 
 	if (CFG::Visuals_Chat_Player_List_Info)
 	{

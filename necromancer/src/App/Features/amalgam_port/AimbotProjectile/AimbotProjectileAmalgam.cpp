@@ -41,6 +41,27 @@ std::vector<Target_t> CAmalgamAimbotProjectile::GetTargets(C_TFPlayer* pLocal, C
 			if (pPlayer->InCond(TF_COND_HALLOWEEN_GHOST_MODE))
 				continue;
 
+			// Vaccinator ignore (ported from Amalgam)
+			if (CFG::Aimbot_Ignore_Vaccinator)
+			{
+				const int nWeaponID = pWeapon->GetWeaponID();
+				if (nWeaponID == TF_WEAPON_FLAMETHROWER || nWeaponID == TF_WEAPON_FLAME_BALL || nWeaponID == TF_WEAPON_FLAREGUN)
+				{
+					if (pPlayer->InCond(TF_COND_MEDIGUN_UBER_FIRE_RESIST))
+						continue;
+				}
+				else if (nWeaponID == TF_WEAPON_COMPOUND_BOW)
+				{
+					if (pPlayer->InCond(TF_COND_MEDIGUN_UBER_BULLET_RESIST))
+						continue;
+				}
+				else
+				{
+					if (pPlayer->InCond(TF_COND_MEDIGUN_UBER_BLAST_RESIST))
+						continue;
+				}
+			}
+
 			// Ignore untagged players when key is held
 			if (CFG::Aimbot_Ignore_Untagged_Key != 0 && H::Input->IsDown(CFG::Aimbot_Ignore_Untagged_Key))
 			{
@@ -401,7 +422,7 @@ std::vector<Point_t> CAmalgamAimbotProjectile::GetSplashPoints(Target_t& tTarget
 				return false;
 
 			bErase = tPoint.m_tSolution.m_iCalculated == CalculatedEnum::Good;
-			if (!bErase || int(tPoint.m_tSolution.m_flTime / TICK_INTERVAL) + 1 != iSimTime)
+			if (!bErase || ceilf(tPoint.m_tSolution.m_flTime / TICK_INTERVAL) != iSimTime)
 				return false;
 
 			vPointDistances.emplace_back(tPoint, tPoint.m_vPoint.DistTo(tTarget.m_vPos));
@@ -526,7 +547,7 @@ std::vector<Point_t> CAmalgamAimbotProjectile::GetSplashPointsSimple(Target_t& t
 			CalculateAngle(m_tInfo.m_vLocalEye, tPoint.m_vPoint, iSimTime, tPoint.m_tSolution);
 
 			bErase = tPoint.m_tSolution.m_iCalculated == CalculatedEnum::Good;
-			if (!bErase || int(tPoint.m_tSolution.m_flTime / TICK_INTERVAL) + 1 != iSimTime)
+			if (!bErase || ceilf(tPoint.m_tSolution.m_flTime / TICK_INTERVAL) != iSimTime)
 				return false;
 
 			vPointDistances.emplace_back(tPoint, tPoint.m_vPoint.DistTo(tTarget.m_vPos));
@@ -614,7 +635,7 @@ void CAmalgamAimbotProjectile::CalculateAngle(const Vec3& vLocalPos, const Vec3&
 		out.m_flYaw = flYaw = vAngleTo.y - m_tInfo.m_vAngFix.y;
 	}
 
-	int iTimeTo = int(out.m_flTime / TICK_INTERVAL) + 1;
+	int iTimeTo = ceilf(out.m_flTime / TICK_INTERVAL);
 	if (!m_tInfo.m_vOffset.IsZero())
 	{
 		if (out.m_iCalculated = iTimeTo > iSimTime ? CalculatedEnum::Time : CalculatedEnum::Pending)
@@ -687,7 +708,7 @@ void CAmalgamAimbotProjectile::CalculateAngle(const Vec3& vLocalPos, const Vec3&
 		}
 	}
 
-	iTimeTo = int(out.m_flTime / TICK_INTERVAL) + 1;
+	iTimeTo = ceilf(out.m_flTime / TICK_INTERVAL);
 	out.m_iCalculated = iTimeTo > iSimTime ? CalculatedEnum::Time : CalculatedEnum::Good;
 }
 
@@ -734,7 +755,7 @@ bool CAmalgamAimbotProjectile::TestAngle(CTFPlayer* pLocal, CTFWeaponBase* pWeap
 			return false;
 	}
 
-	if (!tTarget.m_pEntity)
+	if (!tTarget.m_pEntity || !H::Entities->IsEntityValid(tTarget.m_pEntity))
 		return false;
 
 	bool bDidHit = false;
@@ -853,7 +874,7 @@ int CAmalgamAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWe
 	tTarget.m_vPos = tTarget.m_pEntity->m_vecOrigin();
 
 	m_tInfo = { pLocal, pWeapon };
-	m_tInfo.m_vLocalEye = F::AmalgamTicks->GetShootPos(); // Use predicted shoot pos that accounts for CrouchWhileAirborne
+	m_tInfo.m_vLocalEye = SDK::GetPredictedShootPos(pLocal); // Predicted shoot pos accounting for airborne duck (CrouchWhileAirborne)
 	
 	if (bIsPlayer)
 		m_tInfo.m_vTargetEye = tTarget.m_pEntity->As<CTFPlayer>()->GetViewOffset();
@@ -921,7 +942,7 @@ int CAmalgamAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWe
 		if (bMoveSim)
 		{
 			vPlayerPath.push_back(F::MovementSimulation->GetOrigin());
-			F::MovementSimulation->RunTick(TICKS_TO_TIME(i));
+			F::MovementSimulation->RunTick();
 			tTarget.m_vPos = F::MovementSimulation->GetOrigin();
 		}
 		if (i < 0)
@@ -1283,11 +1304,14 @@ bool CAmalgamAimbotProjectile::RunMain(C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 	if (vTargets.empty())
 		return false;
 
-	if (!G::AimTarget.m_iEntIndex)
+	if (!G::AimTarget.m_iEntIndex && vTargets.front().m_pEntity && H::Entities->IsEntityValid(vTargets.front().m_pEntity))
 		G::AimTarget = { vTargets.front().m_pEntity->entindex(), I::GlobalVars->tickcount, 0 };
 
 	for (auto& tTarget : vTargets)
 	{
+		// Validate entity is still alive — may have been destroyed since target selection
+		if (!tTarget.m_pEntity || !H::Entities->IsEntityValid(tTarget.m_pEntity))
+			continue;
 		m_flTimeTo = std::numeric_limits<float>::max();
 		m_vPlayerPath.clear(); m_vProjectilePath.clear(); m_vBoxes.clear();
 
@@ -1309,7 +1333,7 @@ bool CAmalgamAimbotProjectile::RunMain(C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 		G::nTargetIndexEarly = tTarget.m_pEntity->entindex();
 		G::AimPoint = { tTarget.m_vPos, I::GlobalVars->tickcount };
 
-		if (CFG::Aimbot_AutoShoot)
+		if (CFG::Aimbot_AutoShoot && !G::bAutoScopeWaitActive)
 		{
 			pCmd->buttons |= IN_ATTACK;
 			if (pWeapon->m_iItemDefinitionIndex() == Soldier_m_TheBeggarsBazooka)
@@ -1336,12 +1360,6 @@ bool CAmalgamAimbotProjectile::RunMain(C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 		// Only draw on the tick we actually fire, or if enough time has passed since last draw
 		if (bJustFired || (bFiringNow && I::GlobalVars->tickcount - nLastDrawTick > 66)) // ~1 second between redraws if holding
 		{
-			// Notify movement simulation that we fired at this target (for reaction learning)
-			if (bJustFired && tTarget.m_iTargetType == TargetEnum::Player && tTarget.m_pEntity)
-			{
-				F::MovementSimulation->OnShotFired(tTarget.m_pEntity->entindex());
-			}
-			
 			// Clear previous overlays
 			I::DebugOverlay->ClearAllOverlays();
 			nLastDrawTick = I::GlobalVars->tickcount;
@@ -1375,50 +1393,7 @@ bool CAmalgamAimbotProjectile::RunMain(C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 			}
 		}
 
-		// Apply dodge prediction offset for players
-		if (CFG::Aimbot_Projectile_Use_Dodge_Prediction && tTarget.m_iTargetType == TargetEnum::Player && tTarget.m_pEntity)
-		{
-			const int nTargetIdx = tTarget.m_pEntity->entindex();
-			auto* pBehavior = F::MovementSimulation->GetPlayerBehavior(nTargetIdx);
-			
-			if (pBehavior && pBehavior->GetConfidence() > 0.5f && pBehavior->m_Combat.m_nReactionSamples >= 5)
-			{
-				const int nDodgeDir = F::MovementSimulation->GetPredictedDodge(nTargetIdx);
-				
-				// Only apply if they have a clear dodge preference (not "no reaction")
-				if (nDodgeDir != 0)
-				{
-					// Scale offset by:
-					// - Confidence: how sure we are about their dodge pattern
-					// - Time to target: longer flight = more time to dodge = bigger offset
-					// - Reaction rate: how often they actually dodge vs stand still
-					const float flConfidence = pBehavior->GetConfidence();
-					const float flReactionRate = pBehavior->m_Combat.m_flReactionToThreat;
-					
-					// Time scaling: 0.3s = minimal offset, 1.0s+ = full offset
-					const float flTimeScale = Math::RemapValClamped(m_flTimeTo, 0.3f, 1.0f, 0.1f, 1.0f);
-					
-					// Base offset in degrees, scaled by all factors
-					const float flBaseOffset = 2.0f;
-					const float flOffset = flBaseOffset * flConfidence * flTimeScale * flReactionRate;
-					
-					switch (nDodgeDir)
-					{
-					case -1: // Dodge left - aim slightly right
-						tTarget.m_vAngleTo.y -= flOffset;
-						break;
-					case 1:  // Dodge right - aim slightly left
-						tTarget.m_vAngleTo.y += flOffset;
-						break;
-					case 2:  // Dodge jump - aim slightly higher
-						tTarget.m_vAngleTo.x -= flOffset * 0.7f;
-						break;
-					case 3:  // Dodge back - already handled by movement prediction
-						break;
-					}
-				}
-			}
-		}
+		// Dodge prediction removed with behavior system removal
 
 		Aim(pCmd, tTarget.m_vAngleTo, Vars::Aimbot::General::AimType.Value, bIsFiring);
 		return true;
@@ -1455,7 +1430,7 @@ void CAmalgamAimbotProjectile::SetupInfo(C_TFPlayer* pLocal, C_TFWeaponBase* pWe
 		return;
 	
 	m_tInfo = { pLocal, pWeapon };
-	m_tInfo.m_vLocalEye = F::AmalgamTicks->GetShootPos(); // Use predicted shoot pos that accounts for CrouchWhileAirborne
+	m_tInfo.m_vLocalEye = SDK::GetPredictedShootPos(pLocal); // Predicted shoot pos accounting for airborne duck (CrouchWhileAirborne)
 	m_tInfo.m_flLatency = F::Backtrack.GetReal() + TICKS_TO_TIME(F::Backtrack.GetAnticipatedChoke());
 
 	Vec3 vVelocity = F::ProjSim.GetVelocity();

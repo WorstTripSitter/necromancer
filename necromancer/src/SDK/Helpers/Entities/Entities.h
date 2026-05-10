@@ -22,10 +22,12 @@ enum class EEntGroup
 	HEALTHPACKS,
 	AMMOPACKS,
 	HALLOWEEN_GIFT,
-	MVM_MONEY
+	MVM_MONEY,
+
+	COUNT // Must be last - used for array sizing
 };
 
-// Hash specialization for unordered_map
+// Hash specialization for unordered_map (kept for backward compat, but m_mapGroups is now a flat array)
 template<>
 struct std::hash<EEntGroup>
 {
@@ -51,8 +53,39 @@ public:
 	C_TFPlayer* GetLocal();
 	C_TFWeaponBase* GetWeapon();
 
+	// Validate a cached entity pointer is still alive and matches the entity list
+	// This prevents dangling pointer access after entity destruction (class change, death, level transition)
+	template<typename T>
+	static bool IsEntityValid(T* pEntity)
+	{
+		if (!pEntity || !I::ClientEntityList || !I::EngineClient)
+			return false;
+
+		const int nIndex = pEntity->entindex();
+		if (nIndex <= 0)
+			return false;
+
+		const auto pCheck = I::ClientEntityList->GetClientEntity(nIndex);
+		return pCheck == pEntity;
+	}
+
+	// Safe validation that doesn't dereference the cached pointer.
+	// Use when the pointer might be dangling (freed memory) — calling entindex()
+	// on a dangling pointer can crash. This version uses a known index instead.
+	template<typename T>
+	static bool SafeIsEntityValid(T* pEntity, int nKnownIndex)
+	{
+		if (!pEntity || !I::ClientEntityList || nKnownIndex <= 0)
+			return false;
+
+		const auto pCheck = I::ClientEntityList->GetClientEntity(nKnownIndex);
+		return pCheck == pEntity;
+	}
+
 private:
-	std::unordered_map<EEntGroup, std::vector<C_BaseEntity*>> m_mapGroups = {};
+	// Flat array indexed by EEntGroup - O(1) lookup, no hash overhead
+	// Replaces unordered_map<EEntGroup, vector<C_BaseEntity*>>
+	std::vector<C_BaseEntity*> m_mapGroups[static_cast<int>(EEntGroup::COUNT)] = {};
 	std::unordered_map<int, bool> m_mapHealthPacks = {};
 	std::unordered_map<int, bool> m_mapAmmoPacks = {};
 
@@ -83,7 +116,7 @@ public:
 		m_mapAmmoPacks.clear();
 	}
 
-	const std::vector<C_BaseEntity*>& GetGroup(const EEntGroup group) { return m_mapGroups[group]; }
+	const std::vector<C_BaseEntity*>& GetGroup(const EEntGroup group) { return m_mapGroups[static_cast<int>(group)]; }
 
 	// F2P and Party detection methods
 	bool IsF2P(int nPlayerIndex);

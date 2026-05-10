@@ -13,6 +13,7 @@
 #include "TF2/imaterialsystem.h"
 #include "TF2/ivmodelrender.h"
 #include "TF2/ienginevgui.h"
+#include "TF2/IPanel.h"
 #include "TF2/ivrenderview.h"
 #include "TF2/globalvars_base.h"
 #include "TF2/icvar.h"
@@ -27,6 +28,7 @@
 #include "TF2/itoolentity.h"
 #include "TF2/random.h"
 #include "TF2/client.h"
+#include "TF2/demo.h"
 #include "TF2/iviewrender.h"
 #include "TF2/iviewrender_beams.h"
 #include "TF2/vphysics.h"
@@ -52,7 +54,7 @@
 
 #include "Steam/SteamInterfaces.h"
 
-#define PRINT(...) I::CVar->ConsoleColorPrintf({ 20, 220, 55, 255 }, __VA_ARGS__)
+#define PRINT(...) if (I::CVar) I::CVar->ConsoleColorPrintf({ 20, 220, 55, 255 }, __VA_ARGS__)
 
 //MAKE_INTERFACE_SIGNATURE(int, RandomSeed, "client.dll", "C7 05 ? ? ? ? ? ? ? ? C3 8B 41", 0x2, 1);
 
@@ -104,7 +106,7 @@ namespace SDKUtils
 		return reinterpret_cast<CGlowObjectManager*>(dest);
 	}
 
-	inline void GetProjectileFireSetupRebuilt(C_TFPlayer *player, Vec3 offset, const Vec3 &ang_in, Vec3 &pos_out, Vec3 &ang_out, bool pipes)
+	inline void GetProjectileFireSetupRebuilt(C_TFPlayer *player, Vec3 offset, const Vec3 &ang_in, Vec3 &pos_out, Vec3 &ang_out, bool pipes, Vec3 shoot_pos = {0, 0, -1})
 	{
 		static auto cl_flipviewmodels{ I::CVar->FindVar("cl_flipviewmodels") };
 
@@ -121,7 +123,10 @@ namespace SDKUtils
 		Vec3 forward{}, right{}, up{};
 		Math::AngleVectors(ang_in, &forward, &right, &up);
 
-		auto shoot_pos{ player->GetShootPos() };
+		// Sentinel value {0,0,-1} means "use player's current shoot position"
+		// (a real shoot position can never have z=-1 since world z is always positive)
+		if (shoot_pos.z == -1.f)
+			shoot_pos = player->GetShootPos();
 
 		pos_out = shoot_pos + (forward * offset.x) + (right * offset.y) + (up * offset.z);
 
@@ -158,7 +163,7 @@ namespace SDKUtils
 		static ConVar *cl_interp_ratio = I::CVar->FindVar("cl_interp_ratio");
 		static ConVar *cl_updaterate = I::CVar->FindVar("cl_updaterate");
 
-		return std::max(cl_interp->GetFloat(), cl_interp_ratio->GetFloat() / cl_updaterate->GetFloat());
+		return (std::max)(cl_interp->GetFloat(), cl_interp_ratio->GetFloat() / cl_updaterate->GetFloat());
 	}
 
 	static Vec3 GetHitboxPosFromMatrix(C_BaseAnimating *pAnimating, int nHitbox, matrix3x4_t *pMatrix)
@@ -271,7 +276,7 @@ namespace SDKUtils
 
 		while (nIter++ < 1024)
 		{
-			int nSeed = MD5_PseudoRandom(++nCmdNum) & std::numeric_limits<int>::max();
+			int nSeed = MD5_PseudoRandom(++nCmdNum) & (std::numeric_limits<int>::max)();
 
 			if ((nSeed & 255) == nDesiredSeed)
 				return nCmdNum;
@@ -351,11 +356,14 @@ namespace G
 		Vec3 m_vecOrigin = {};
 		int m_fFlags = 0;
 		float m_flSimulationTime = 0.0f;
+		bool m_bActive = false;
 	};
 
-	inline std::unordered_map<C_BasePlayer *, VelFixRecord_t> mapVelFixRecords = {};
+	static constexpr int MAX_VELFIX_SLOTS = 65;
+	inline VelFixRecord_t mapVelFixRecords[MAX_VELFIX_SLOTS] = {};
 
 	inline bool bFiring = false;
+	inline bool bAutoScopeWaitActive = false;  // AutoScope wait-after-shot: aimbot should not fire
 	inline int nTicksTargetSame = 0;
 	inline int nTargetIndexEarly = 0;
 	inline int nTicksSinceCanFire = 0;
@@ -368,6 +376,9 @@ namespace G
 
 	// Neckbreaker: flip viewmodels for this shot
 	inline bool bNeckbreakerFlip = false;
+
+	// Rejoin on kick - retry immediately after being kicked
+	inline bool bRejoinOnKickPending = false;
 
 	// ============================================
 	// Amalgam-style path storage for visualization

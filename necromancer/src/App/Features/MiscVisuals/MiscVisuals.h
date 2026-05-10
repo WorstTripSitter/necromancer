@@ -22,6 +22,7 @@ class CMiscVisuals
 	Vec3 m_vFreecamPos = {};
 	Vec3 m_vFreecamAngles = {};
 	Vec3 m_vSavedPlayerAngles = {}; // Saved player angles to restore when exiting freecam
+	bool m_bWasThirdpersonBeforeFreecam = false; // Saved thirdperson state to restore when exiting freecam
 
 public:
 	void AimbotFOVCircle();
@@ -29,6 +30,7 @@ public:
 	void ViewModelSway();
 	void DetailProps();
 	void ShiftBar();
+	void ShiftBarDrag();
 
 	void SniperLines();
 	void CritIndicator();

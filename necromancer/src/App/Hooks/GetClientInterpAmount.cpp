@@ -12,6 +12,10 @@ MAKE_HOOK(GetClientInterpAmount, Signatures::GetClientInterpAmount.Get(), float,
 	if (!CFG::Visuals_Auto_Interp)
 		return CALL_ORIGINAL();
 
+	// Don't return  lerp during connection — breaks signon handshake
+	if (!I::EngineClient->IsInGame())
+		return CALL_ORIGINAL();
+
 	// Allow net_graph to show real lerp value
 	static const auto dwDesired1 = Signatures::CNetGraphPanel_DrawTextFields_GetClientInterpAmount_Call1.Get();
 	static const auto dwDesired2 = Signatures::CNetGraphPanel_DrawTextFields_GetClientInterpAmount_Call2.Get();

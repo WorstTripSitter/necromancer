@@ -500,6 +500,10 @@ using CTFSniperRifle = C_TFSniperRifle;
 #define TICKS_TO_TIME(t) (TICK_INTERVAL * static_cast<float>(t))
 #endif
 
+#ifndef ROUND_TO_TICKS
+#define ROUND_TO_TICKS(t) (TICKS_TO_TIME(TIME_TO_TICKS(t)))
+#endif
+
 // ============================================
 // Physics Constants
 // ============================================
@@ -530,13 +534,15 @@ enum class EntityEnum
 
 class CAmalgamEntitiesHelper
 {
+public:
+    // Origin record for velocity computation (needs to be public for hook access)
+    struct VelFixOriginRecord { Vec3 m_vecOrigin; float m_flSimulationTime; };
+
 private:
     // Per-entity tracking data - limited to max 64 players
-    std::unordered_map<int, float> m_mLastSimTime;
-    std::unordered_map<int, float> m_mDeltaTime;
-    std::unordered_map<int, int> m_mChoke;
     std::unordered_map<int, Vec3> m_mAvgVelocity;
     std::unordered_map<int, bool> m_mLagCompensation;
+    std::unordered_map<int, std::deque<VelFixOriginRecord>> m_mOrigins;
 
 public:
     C_TFPlayer* GetLocal() { return H::Entities ? H::Entities->GetLocal() : nullptr; }
@@ -545,11 +551,9 @@ public:
     // Clear all tracking data (call on map change/disconnect)
     void Clear()
     {
-        m_mLastSimTime.clear();
-        m_mDeltaTime.clear();
-        m_mChoke.clear();
         m_mAvgVelocity.clear();
         m_mLagCompensation.clear();
+        m_mOrigins.clear();
     }
     
     // Entity group iteration - maps Amalgam's EntityEnum to SEOwnedDE's EEntGroup
@@ -603,66 +607,7 @@ public:
         return false; // TODO: Implement party check via CTFPartyClient
     }
     
-    // Choke tracking - tracks how many ticks since last update
-    // Calculate from delta time like Amalgam does
-    int GetChoke(int iIndex)
-    {
-        float flDeltaTime = GetDeltaTime(iIndex);
-        if (flDeltaTime > 0.f)
-            return std::max(TIME_TO_TICKS(flDeltaTime) - 1, 0);
-        return 0;
-    }
-    
-    void SetChoke(int iIndex, int iChoke)
-    {
-        m_mChoke[iIndex] = iChoke;
-    }
-    
-    // Delta time tracking - time between simulation updates
-    // Calculate directly from player's simulation times (like Amalgam does)
-    float GetDeltaTime(int iIndex)
-    {
-        // Safety checks
-        if (!I::ClientEntityList)
-            return TICK_INTERVAL;
-        
-        auto pClientEntity = I::ClientEntityList->GetClientEntity(iIndex);
-        if (!pClientEntity)
-            return TICK_INTERVAL;
-        
-        auto pPlayer = pClientEntity->As<C_TFPlayer>();
-        if (!pPlayer || !IsPlayer(pPlayer))
-            return TICK_INTERVAL;
-        
-        float flSimTime = pPlayer->m_flSimulationTime();
-        float flOldSimTime = pPlayer->m_flOldSimulationTime();
-        
-        // Calculate delta ticks - 0 means no update this frame (standing still)
-        int iDeltaTicks = std::clamp(TIME_TO_TICKS(flSimTime - flOldSimTime), 0, 24);
-        
-        return TICKS_TO_TIME(iDeltaTicks);
-    }
-    
-    void UpdateDeltaTime(int iIndex, float flSimTime)
-    {
-        if (m_mLastSimTime.contains(iIndex))
-        {
-            float flDelta = flSimTime - m_mLastSimTime[iIndex];
-            if (flDelta > 0.f)
-            {
-                m_mDeltaTime[iIndex] = flDelta;
-                m_mChoke[iIndex] = TIME_TO_TICKS(flDelta) - 1;
-            }
-            else
-            {
-                m_mDeltaTime[iIndex] = 0.f;
-            }
-        }
-        m_mLastSimTime[iIndex] = flSimTime;
-    }
-    
     // Average velocity tracking
-    // Returns nullptr if no average is stored - MoveSim will use raw velocity
     Vec3* GetAvgVelocity(int iIndex)
     {
         if (!I::EngineClient || iIndex == I::EngineClient->GetLocalPlayer())
@@ -704,14 +649,33 @@ public:
         return {};
     }
     
+    // Origin deque access for velocity computation
+    std::deque<VelFixOriginRecord>* GetOrigins(int iIndex)
+    {
+        if (!m_mOrigins.contains(iIndex))
+            return nullptr;
+        return &m_mOrigins[iIndex];
+    }
+
+    void PushOrigin(int iIndex, const Vec3& vOrigin, float flSimTime, int iMaxCount = 20)
+    {
+        auto& deq = m_mOrigins[iIndex];
+        deq.emplace_front(VelFixOriginRecord{ vOrigin, flSimTime });
+        while (deq.size() > static_cast<size_t>(iMaxCount))
+            deq.pop_back();
+    }
+
+    void ClearOrigins(int iIndex)
+    {
+        m_mOrigins.erase(iIndex);
+    }
+
     // Clear tracking data for disconnected players
     void ClearPlayer(int iIndex)
     {
-        m_mLastSimTime.erase(iIndex);
-        m_mDeltaTime.erase(iIndex);
-        m_mChoke.erase(iIndex);
         m_mAvgVelocity.erase(iIndex);
         m_mLagCompensation.erase(iIndex);
+        m_mOrigins.erase(iIndex);
     }
 };
 
@@ -1131,10 +1095,53 @@ namespace SDK
         return pPlayer->TeamFortress_CalculateMaxSpeed(bIgnoreSpecialAbility);
     }
     
-    // Projectile fire setup
+    // Predicted shoot position accounting for pending duck state
+    // When CrouchWhileAirborne sets IN_DUCK while airborne, FL_DUCKING isn't set yet
+    // but the server will process the duck instantly via FinishDuck().
+    //
+    // Source SDK FinishDuck() does TWO things when ducking in air:
+    //   1. SetViewOffset(VEC_DUCK_VIEW_SCALED) = 45 * scale
+    //   2. SetAbsOrigin(origin + viewDelta) where viewDelta = (0,0,20) * scale
+    //      (hullSizeNormal.z - hullSizeCrouch.z = 82 - 62 = 20)
+    //
+    // Server eye = (origin + 20*scale) + 45*scale = origin + 65*scale
+    // Client eye = origin + m_vecViewOffset (standing class eye height)
+    // Adjustment = 20*scale + 45*scale - m_vecViewOffset.z
+    inline Vec3 GetPredictedShootPos(C_TFPlayer* pPlayer, const CUserCmd* pCmd = nullptr)
+    {
+        if (!pPlayer)
+            return {};
+
+        Vec3 vShootPos = pPlayer->GetShootPos();
+
+        const CUserCmd* cmd = pCmd ? pCmd : G::CurrentUserCmd;
+        if (cmd)
+        {
+            const bool bCurrentlyDucking = (pPlayer->m_fFlags() & FL_DUCKING) != 0;
+            const bool bWantsToDuck = (cmd->buttons & IN_DUCK) != 0;
+            const bool bOnGround = (pPlayer->m_fFlags() & FL_ONGROUND) != 0;
+
+            // Airborne duck is instant — if IN_DUCK is set but FL_DUCKING isn't, predict the position
+            if (bWantsToDuck && !bCurrentlyDucking && !bOnGround)
+            {
+                // Server shifts origin UP by 20*scale and sets view offset to 45*scale
+                // Net server eye = origin + 65*scale
+                // Current client eye = origin + m_vecViewOffset.z (standing height)
+                const float flScale = pPlayer->m_flModelScale();
+                const float flCurrentViewZ = pPlayer->m_vecViewOffset().z;
+                vShootPos.z += (20.0f * flScale + 45.0f * flScale) - flCurrentViewZ;
+            }
+        }
+
+        return vShootPos;
+    }
+
+    // Projectile fire setup — uses predicted shoot position for consistent duck handling
     inline void GetProjectileFireSetup(C_TFPlayer* pPlayer, const Vec3& vAngles, const Vec3& vOffset, Vec3& vPosOut, Vec3& vAngOut, bool bPipes = false, bool bQuick = false, bool bAllowFlip = true)
     {
-        SDKUtils::GetProjectileFireSetupRebuilt(pPlayer, vOffset, vAngles, vPosOut, vAngOut, bPipes);
+        // Pass predicted shoot position so projectile spawn accounts for airborne duck
+        const Vec3 vShootPos = GetPredictedShootPos(pPlayer);
+        SDKUtils::GetProjectileFireSetupRebuilt(pPlayer, vOffset, vAngles, vPosOut, vAngOut, bPipes, vShootPos);
     }
     
     // Output/debug logging

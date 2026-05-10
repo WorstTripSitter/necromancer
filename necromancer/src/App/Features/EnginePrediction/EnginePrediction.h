@@ -13,6 +13,7 @@ struct RestoreInfo_t
 	Vec3 m_vOrigin = {};
 	Vec3 m_vMins = {};
 	Vec3 m_vMaxs = {};
+	bool m_bActive = false; // Track which slots have valid data
 };
 
 class CEnginePrediction
@@ -28,7 +29,9 @@ private:
 
 	DatamapRestore_t m_tLocal = {};
 
-	std::unordered_map<C_TFPlayer*, RestoreInfo_t> m_mRestore = {};
+	// Flat array indexed by entity index - O(1) lookup, no hash overhead
+	static constexpr int MAX_RESTORE_SLOTS = 65;
+	RestoreInfo_t m_mRestore[MAX_RESTORE_SLOTS] = {};
 
 public:
 	void Start(C_TFPlayer* pLocal, CUserCmd* pCmd);
@@ -41,7 +44,7 @@ public:
 
 	bool m_bInPrediction = false;
 
-	// Prediction output for MovementSimulation use
+	// Prediction output
 	Vec3 m_vOrigin = {};
 	Vec3 m_vVelocity = {};
 	Vec3 m_vDirection = {};

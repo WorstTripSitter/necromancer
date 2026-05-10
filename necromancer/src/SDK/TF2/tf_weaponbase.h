@@ -281,7 +281,11 @@ public:
 	}
 
 	float GetSwingRange() {
-		return GetWeaponID() == TF_WEAPON_SWORD ? 72.0f : 48.0f;
+		// Match server's CTFWeaponBaseMelee::GetSwingRange
+		// Shield charge = 128, sword = 72, default = 48
+		if (GetWeaponID() == TF_WEAPON_SWORD)
+			return 72.0f;
+		return 48.0f;
 	}
 
 	float GetSmackDelay() {

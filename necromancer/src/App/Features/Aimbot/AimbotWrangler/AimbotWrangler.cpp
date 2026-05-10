@@ -613,7 +613,7 @@ bool CAimbotWrangler::GetRocketTarget(C_TFPlayer* pLocal, C_ObjectSentrygun* pSe
 	float flTravelTime = 0.0f;
 	bool bIsAirborne = false;
 	
-	if (target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
+	if (target.Entity && H::Entities->IsEntityValid(target.Entity) && target.Entity->GetClassId() == ETFClassIds::CTFPlayer)
 	{
 		auto pPlayer = target.Entity->As<C_TFPlayer>();
 		
@@ -731,6 +731,8 @@ void CAimbotWrangler::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngle
 bool CAimbotWrangler::ShouldFire(C_TFPlayer* pLocal, C_ObjectSentrygun* pSentry, const WranglerTarget_t& target)
 {
 	if (!CFG::Aimbot_AutoShoot)
+		return false;
+	if (G::bAutoScopeWaitActive)
 		return false;
 	
 	if (!pSentry || pSentry->IsDisabled())
@@ -855,9 +857,9 @@ void CAimbotWrangler::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pW
 		pAimTarget = &bulletTarget;
 	}
 	
-	if (!pAimTarget || !pAimTarget->Entity)
+	if (!pAimTarget || !pAimTarget->Entity || !H::Entities->IsEntityValid(pAimTarget->Entity))
 		return;
-	
+
 	G::nTargetIndex = pAimTarget->Entity->entindex();
 	G::nTargetIndexEarly = pAimTarget->Entity->entindex();
 	

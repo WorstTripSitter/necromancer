@@ -108,6 +108,14 @@ EWeaponType CAimUtils::GetWeaponType(C_TFWeaponBase *pWeapon)
 		return EWeaponType::OTHER;
 	}
 
+	// Validate the weapon pointer is still in the entity list
+	// Without this, a dangling pointer (from class change, death, etc.) passes the null check
+	// but crashes on vtable calls like GetSlot() reading 0xffffffffffffffff
+	if (!H::Entities->IsEntityValid(pWeapon))
+	{
+		return EWeaponType::OTHER;
+	}
+
 	if (pWeapon->GetSlot() == WEAPON_SLOT_MELEE)
 	{
 		return EWeaponType::MELEE;

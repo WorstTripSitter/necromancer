@@ -7,8 +7,10 @@ MAKE_SIGNATURE(CBaseEntity_BaseInterpolatePart1, "client.dll", "48 89 5C 24 ? 56
 MAKE_HOOK(CBaseEntity_BaseInterpolatePart1, Signatures::CBaseEntity_BaseInterpolatePart1.Get(), int, __fastcall,
 	void* ecx, float& currentTime, Vector& oldOrigin, QAngle& oldAngles, Vector& oldVel, int& bNoMoreChanges)
 {
-	// Safety check - skip custom logic during level transitions
-	if (G::bLevelTransition || !ecx)
+	// Safety check - skip custom logic during level transitions or while not fully in game
+	// During "Parsing game info" the client is connected but not in-game — disabling interpolation
+	// here corrupts entity setup and causes connection hangs
+	if (G::bLevelTransition || !ecx || !I::EngineClient->IsInGame())
 		return CALL_ORIGINAL(ecx, currentTime, oldOrigin, oldAngles, oldVel, bNoMoreChanges);
 
 	auto shouldDisableInterp = [&]

@@ -13,15 +13,21 @@ MAKE_HOOK(CViewRender_DrawViewModels, Signatures::CViewRender_DrawViewModels.Get
 	CALL_ORIGINAL(ecx, viewRender, drawViewmodel);
 
 	// Only run Outlines::Run if outlines are actually enabled and have entities to draw
-	if (CFG::Outlines_Active && (CFG::Outlines_Players_Active || CFG::Outlines_Buildings_Active || CFG::Outlines_World_Active) && !(CFG::Misc_Clean_Screenshot && I::EngineClient->IsTakingScreenshot()))
+	// EXTREME: Skip outlines entirely — saves GPU work
+	if (!CFG::Perf_Extreme_Skip_Outlines && !CFG::Perf_Extreme_Skip_All_Visuals)
 	{
-		if (CFG::Outlines_Style == 4)
+		if (CFG::Outlines_Active && (CFG::Outlines_Players_Active || CFG::Outlines_Buildings_Active || CFG::Outlines_World_Active) && !(CFG::Misc_Clean_Screenshot && I::EngineClient->IsTakingScreenshot()))
 		{
-			F::TF2Glow->Run(); // Register entities with glow manager (rendering happens in DoPostScreenSpaceEffects)
+			if (CFG::Outlines_Style == 4)
+			{
+				F::TF2Glow->Run(); // Register entities with glow manager (rendering happens in DoPostScreenSpaceEffects)
+			}
+			else
+				F::Outlines->Run(); // Custom outline rendering
 		}
-		else
-			F::Outlines->Run(); // Custom outline rendering
 	}
 	
-	F::Paint->Run();
+	// EXTREME: Skip paint rendering
+	if (!CFG::Perf_Extreme_Skip_All_Visuals)
+		F::Paint->Run();
 }

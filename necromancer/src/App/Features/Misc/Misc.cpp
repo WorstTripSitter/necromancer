@@ -57,35 +57,9 @@ void CMisc::CrouchWhileAirborne(CUserCmd* pCmd)
 		if (pLocal->deadflag())
 			return;
 
-		// Don't crouch while projectile aimbot is actively aiming
-		// This prevents messing up the shoot position calculation
-		// G::nTargetIndex is set by aimbot when it has a valid target
-		if (G::nTargetIndex > 0)
-		{
-			// Check if we're using a projectile weapon
-			if (const auto pWeapon = H::Entities->GetWeapon())
-			{
-				switch (pWeapon->GetWeaponID())
-				{
-				case TF_WEAPON_ROCKETLAUNCHER:
-				case TF_WEAPON_ROCKETLAUNCHER_DIRECTHIT:
-				case TF_WEAPON_PARTICLE_CANNON:
-				case TF_WEAPON_GRENADELAUNCHER:
-				case TF_WEAPON_PIPEBOMBLAUNCHER:
-				case TF_WEAPON_CANNON:
-				case TF_WEAPON_FLAREGUN:
-				case TF_WEAPON_FLAREGUN_REVENGE:
-				case TF_WEAPON_COMPOUND_BOW:
-				case TF_WEAPON_CROSSBOW:
-				case TF_WEAPON_SYRINGEGUN_MEDIC:
-				case TF_WEAPON_SHOTGUN_BUILDING_RESCUE:
-					// Projectile weapon with active target - don't crouch
-					return;
-				}
-			}
-		}
-
-		// Use the same crouch logic as melee aimbot
+		// Duck prediction is now handled consistently across all aimbot types
+		// (GetProjectileFireSetupRebuilt, projectile aimbot, hitscan aimbot all predict
+		// the duck-adjusted shoot position when IN_DUCK is set while airborne)
 		F::AimbotMelee->CrouchWhileAirborne(pCmd, pLocal);
 	}
 }
@@ -111,54 +85,75 @@ void CMisc::AutoStrafer(CUserCmd* pCmd)
 		// Wall avoidance - ALWAYS check when airborne, even without movement keys
 		if (CFG::Misc_Auto_Strafe_Avoid_Walls)
 			{
-				Vec3 vLocalPos = pLocal->m_vecOrigin();
-				
-				CTraceFilterWorldCustom filter{};
-				
-				// Cast rays in a circle to find closest wall
-				const int numRays = 8;
-				const float flDetectRadius = 80.0f; // Increased detection range
-				
-				Vec3 vWallNormal = Vec3(0, 0, 0);
-				float flClosestDist = 999999.0f;
-				bool bWallDetected = false;
-				
-				for (int i = 0; i < numRays; i++)
+				// Throttle TraceRays to every 5 ticks - wall geometry doesn't change between ticks
+				static int nLastTraceTick = 0;
+				static Vec3 vCachedWallNormal = Vec3(0, 0, 0);
+				static float flCachedClosestDist = 999999.0f;
+				static bool bCachedWallDetected = false;
+
+				const int nCurrentTick = I::GlobalVars->tickcount;
+
+				// Reset cache on map change (tickcount drops when new map loads)
+				if (nCurrentTick < nLastTraceTick)
 				{
-					float flAngle = (360.0f / numRays) * i;
-					float flRad = DEG2RAD(flAngle);
-					
-					Vec3 vDir;
-					vDir.x = cosf(flRad);
-					vDir.y = sinf(flRad);
-					vDir.z = 0.0f;
-					
-					// Start trace from player center
-					Vec3 vStart = vLocalPos;
-					vStart.z += 32.0f; // Eye level
-					
-					// End trace at detection radius
-					Vec3 vEnd = vStart + (vDir * flDetectRadius);
-					
-					trace_t trace{};
-					H::AimUtils->Trace(vStart, vEnd, MASK_SOLID, &filter, &trace);
-					
-					if (trace.DidHit())
+					nLastTraceTick = 0;
+					vCachedWallNormal = Vec3(0, 0, 0);
+					flCachedClosestDist = 999999.0f;
+					bCachedWallDetected = false;
+				}
+
+				if (nCurrentTick - nLastTraceTick >= 5 || nLastTraceTick == 0)
+				{
+					nLastTraceTick = nCurrentTick;
+
+					Vec3 vLocalPos = pLocal->m_vecOrigin();
+					CTraceFilterWorldCustom filter{};
+
+					const int numRays = 8;
+					const float flDetectRadius = 80.0f;
+
+					vCachedWallNormal = Vec3(0, 0, 0);
+					flCachedClosestDist = 999999.0f;
+					bCachedWallDetected = false;
+
+					for (int i = 0; i < numRays; i++)
 					{
-						float flDist = trace.fraction * flDetectRadius;
-						
-						// Only consider walls that are actually in front of us (not inside player)
-						if (flDist > 5.0f && flDist < flClosestDist)
+						float flAngle = (360.0f / numRays) * i;
+						float flRad = DEG2RAD(flAngle);
+
+						Vec3 vDir;
+						vDir.x = cosf(flRad);
+						vDir.y = sinf(flRad);
+						vDir.z = 0.0f;
+
+						Vec3 vStart = vLocalPos;
+						vStart.z += 32.0f;
+
+						Vec3 vEnd = vStart + (vDir * flDetectRadius);
+
+						trace_t trace{};
+						H::AimUtils->Trace(vStart, vEnd, MASK_SOLID, &filter, &trace);
+
+						if (trace.DidHit())
 						{
-							flClosestDist = flDist;
-							// Use wall's surface normal - it points AWAY from wall
-							vWallNormal = trace.plane.normal;
-							vWallNormal.z = 0.0f;
-							vWallNormal.Normalize();
-							bWallDetected = true;
+							float flDist = trace.fraction * flDetectRadius;
+
+							if (flDist > 5.0f && flDist < flCachedClosestDist)
+							{
+								flCachedClosestDist = flDist;
+								vCachedWallNormal = trace.plane.normal;
+								vCachedWallNormal.z = 0.0f;
+								vCachedWallNormal.Normalize();
+								bCachedWallDetected = true;
+							}
 						}
 					}
 				}
+
+				// Use cached wall data (still recompute avoidance from current velocity each tick)
+				const Vec3& vWallNormal = vCachedWallNormal;
+				const float flClosestDist = flCachedClosestDist;
+				const bool bWallDetected = bCachedWallDetected;
 				
 			// Simple approach: only avoid if wall is close AND we're moving towards it
 			if (bWallDetected && flClosestDist < 60.0f)
@@ -793,107 +788,66 @@ void CMisc::AutoDisguise(CUserCmd* cmd)
 
 void CMisc::AutoMedigun(CUserCmd* cmd)
 {
-	// Static cache to reduce trace spam - use entity index instead of raw pointer
-	// Raw pointers become dangling after death/level change!
-	static int nCachedTargetIndex = 0;
-	static int nLastUpdateTick = 0;
-	
-	// Helper to safely get cached target from index
-	auto getCachedTarget = [&]() -> C_TFPlayer*
-	{
-		if (nCachedTargetIndex <= 0)
-			return nullptr;
-		
-		// Validate entity still exists in current entity list
-		for (const auto ent : H::Entities->GetGroup(EEntGroup::PLAYERS_TEAMMATES))
-		{
-			if (!ent) continue;
-			auto pl = ent->As<C_TFPlayer>();
-			if (pl && pl->entindex() == nCachedTargetIndex)
-				return pl;
-		}
-		
-		// Entity no longer valid (died, disconnected, level change)
-		nCachedTargetIndex = 0;
-		return nullptr;
-	};
-	
-	// Check if Auto Heal is enabled
+	// =========================================================================
+	// AutoMedigun - smart beam lock implementation
+	// 
+	// Key insight: As long as IN_ATTACK is held and we have a valid target
+	// in range, the medigun maintains the beam. No need to constantly aim.
+	//
+	// Bug fixes from original:
+	// 1. User priority: if user presses IN_ATTACK, let them control
+	// 2. Target switching: search for better targets even while beam attached
+	// 3. Uber: don't release beam when target is invulnerable from uber
+	// 4. No pSilent: use bSilentAngles (view restore only, no packet choke)
+	// 5. No static pointers: search every tick, no stale cache
+	// =========================================================================
+
 	if (!CFG::AutoUber_AutoHeal_Active)
-	{
-		nCachedTargetIndex = 0;
 		return;
-	}
-	
-	// Check if enabled: Always On OR triggerbot master switch is active
+
 	if (!CFG::AutoUber_Always_On && !H::Input->IsDown(CFG::Triggerbot_Key))
-	{
-		nCachedTargetIndex = 0;
 		return;
-	}
 
 	if (I::EngineVGui->IsGameUIVisible() || I::MatSystemSurface->IsCursorVisible() || SDKUtils::BInEndOfMatch())
-	{
-		nCachedTargetIndex = 0;
 		return;
-	}
 
 	const auto local = H::Entities->GetLocal();
 	if (!local || local->deadflag() || local->m_iClass() != TF_CLASS_MEDIC)
-	{
-		nCachedTargetIndex = 0;
 		return;
-	}
 
 	if (local->InCond(TF_COND_TAUNTING) || local->InCond(TF_COND_HALLOWEEN_GHOST_MODE) ||
 		local->InCond(TF_COND_HALLOWEEN_BOMB_HEAD) || local->InCond(TF_COND_HALLOWEEN_KART))
-	{
-		nCachedTargetIndex = 0;
 		return;
-	}
 
 	const auto weapon = H::Entities->GetWeapon();
 	if (!weapon || weapon->GetWeaponID() != TF_WEAPON_MEDIGUN)
-	{
-		nCachedTargetIndex = 0;
 		return;
-	}
 
 	const auto medigun = weapon->As<C_WeaponMedigun>();
 	if (!medigun)
+		return;
+
+	// User priority: when user presses IN_ATTACK, autoheal turns off completely.
+	// User's choice of heal target is always superior to the code.
+	// After they release, wait a few ticks for beam to detach before re-engaging.
+	static int nUserOverrideTicks = 0;
+
+	if (cmd->buttons & IN_ATTACK)
 	{
-		nCachedTargetIndex = 0;
+		nUserOverrideTicks = 5; // After release, wait 5 ticks for beam to detach
+		return; // User is controlling — autoheal off
+	}
+
+	// Still in override cooldown — let beam detach naturally
+	if (nUserOverrideTicks > 0)
+	{
+		nUserOverrideTicks--;
 		return;
 	}
 
-	// Get max overheal multiplier based on medigun type
-	float flOverhealMult = 1.5f;
-	if (medigun->GetMedigunType() == MEDIGUN_QUICKFIX)
-		flOverhealMult = 1.25f;
-
-	// Quick validity check (no trace)
-	auto isQuickValid = [&](C_TFPlayer* pl) -> bool
-	{
-		if (!pl || pl->deadflag() || pl == local)
-			return false;
-		if (pl->GetCenter().DistTo(local->GetShootPos()) > 449.0f)
-			return false;
-		if (pl->InCond(TF_COND_STEALTHED) || pl->IsInvulnerable())
-			return false;
-		return true;
-	};
-
-	// Full validity check with trace (expensive)
-	auto isFullyValid = [&](C_TFPlayer* pl) -> bool
-	{
-		if (!isQuickValid(pl))
-			return false;
-		
-		CTraceFilterHitscan filter{};
-		trace_t tr{};
-		H::AimUtils->Trace(local->GetShootPos(), pl->GetCenter(), (MASK_SHOT & ~CONTENTS_HITBOX), &filter, &tr);
-		return tr.fraction > 0.99f || tr.m_pEnt == pl;
-	};
+	const float flOverhealMult = (medigun->GetMedigunType() == MEDIGUN_QUICKFIX) ? 1.25f : 1.5f;
+	constexpr float FL_CONNECT_RANGE = 450.0f;
+	constexpr float FL_STICK_RANGE = 540.0f;
 
 	auto getHealthPercent = [&](C_TFPlayer* pl) -> float
 	{
@@ -906,84 +860,182 @@ void CMisc::AutoMedigun(CUserCmd* cmd)
 		return pl->IsPlayerOnSteamFriendsList();
 	};
 
-	// Current heal target from medigun
+	// Check current beam target
 	auto pCurrentTarget = medigun->m_hHealingTarget().Get();
-	C_TFPlayer* pCurrentHealPlayer = pCurrentTarget ? pCurrentTarget->As<C_TFPlayer>() : nullptr;
+	C_TFPlayer* pCurrentHealPlayer = nullptr;
 
-	// Only do full target search every 5 ticks to reduce lag
-	const int nCurrentTick = I::GlobalVars->tickcount;
-	const bool bShouldUpdateTarget = (nCurrentTick - nLastUpdateTick) >= 5;
-
-	// Get cached target safely (validates entity still exists)
-	C_TFPlayer* pCachedTarget = getCachedTarget();
-	
-	// If we have a cached target, check if still valid
-	if (pCachedTarget && isQuickValid(pCachedTarget))
+	if (pCurrentTarget && H::Entities->IsEntityValid(pCurrentTarget))
 	{
-		float flPercent = getHealthPercent(pCachedTarget);
-		
-		// If cached target is fully healed, force update
-		if (flPercent >= 0.99f)
+		auto pAsPlayer = pCurrentTarget->As<C_TFPlayer>();
+		if (pAsPlayer && !pAsPlayer->deadflag())
+			pCurrentHealPlayer = pAsPlayer;
+	}
+
+	const bool bBeamAttached = pCurrentHealPlayer && medigun->m_bHealing();
+	const bool bUberActive = medigun->m_bChargeRelease();
+
+	// If beam is attached, check if we should keep it or switch
+	if (bBeamAttached)
+	{
+		const float flDist = pCurrentHealPlayer->GetCenter().DistTo(local->GetShootPos());
+
+		// Only release beam if target is out of range
+		// DON'T release for invulnerability during uber — that caused the heal/unheal loop
+		// For non-uber invuln (Bonk etc), we still keep beam to build charge
+		if (flDist > FL_STICK_RANGE)
 		{
-			nCachedTargetIndex = 0;
-			pCachedTarget = nullptr;
+			cmd->buttons &= ~IN_ATTACK;
 		}
+		else
+		{
+			// Beam is valid — hold IN_ATTACK to maintain it (no angle change needed)
+			cmd->buttons |= IN_ATTACK;
+
+			// Search for better targets while beam is attached
+			// Always look — don't wait for current target to be high health
+			const float flCurrentHealth = getHealthPercent(pCurrentHealPlayer);
+
+			// Don't switch during uber
+			if (!bUberActive)
+			{
+				C_TFPlayer* pBetterTarget = nullptr;
+				float flBetterHealth = flCurrentHealth - 0.1f; // Must be 10% lower to switch
+
+				const int nMaxClients = I::EngineClient->GetMaxClients();
+				for (int n = 1; n <= nMaxClients; n++)
+				{
+					auto pClientEntity = I::ClientEntityList->GetClientEntity(n);
+					if (!pClientEntity || pClientEntity->IsDormant())
+						continue;
+
+					auto pl = pClientEntity->As<C_TFPlayer>();
+					if (!pl || pl->deadflag() || pl == local || pl == pCurrentHealPlayer)
+						continue;
+
+					if (pl->m_iTeamNum() != local->m_iTeamNum())
+						continue;
+
+					const float flPlDist = pl->GetCenter().DistTo(local->GetShootPos());
+					if (flPlDist > FL_CONNECT_RANGE)
+						continue;
+
+					if (pl->InCond(TF_COND_STEALTHED) || pl->IsInvulnerable())
+						continue;
+
+					if (CFG::AutoUber_AutoHeal_Friends_Only && !isFriend(pl))
+						continue;
+
+					const float flPercent = getHealthPercent(pl);
+					if (flPercent < flBetterHealth)
+					{
+						CTraceFilterHitscan filter{};
+						trace_t tr{};
+						H::AimUtils->Trace(local->GetShootPos(), pl->GetCenter(), (MASK_SHOT & ~CONTENTS_HITBOX), &filter, &tr);
+
+						if (tr.fraction > 0.99f || tr.m_pEnt == pl)
+						{
+							pBetterTarget = pl;
+							flBetterHealth = flPercent;
+						}
+					}
+				}
+
+				if (pBetterTarget)
+				{
+					// Switch to better target — aim at them
+					const auto angle = Math::CalcAngle(local->GetShootPos(), pBetterTarget->GetCenter());
+					H::AimUtils->FixMovement(cmd, angle);
+					cmd->viewangles = angle;
+					// IN_ATTACK already set above, beam will detach from old and lock to new
+
+					if (CFG::Misc_Accuracy_Improvements)
+						cmd->tick_count = TIME_TO_TICKS(pBetterTarget->m_flSimulationTime() + SDKUtils::GetLerp());
+
+					// Use bSilentAngles (view restore only) — NOT bPSilentAngles which chokes packets
+					G::bSilentAngles = true;
+				}
+			}
+		}
+		return;
+	}
+
+	// No beam attached — find the best target
+	C_TFPlayer* pBestTarget = nullptr;
+	C_TFPlayer* pBestTargetNeedsHealing = nullptr;
+	float flLowestHealth = 1.0f;
+	float flBestDist = FLT_MAX;
+
+	const int nMaxClients = I::EngineClient->GetMaxClients();
+	for (int n = 1; n <= nMaxClients; n++)
+	{
+		auto pClientEntity = I::ClientEntityList->GetClientEntity(n);
+		if (!pClientEntity || pClientEntity->IsDormant())
+			continue;
+
+		auto pl = pClientEntity->As<C_TFPlayer>();
+		if (!pl || pl->deadflag() || pl == local)
+			continue;
+
+		if (pl->m_iTeamNum() != local->m_iTeamNum())
+			continue;
+
+		const float flDist = pl->GetCenter().DistTo(local->GetShootPos());
+		if (flDist > FL_CONNECT_RANGE)
+			continue;
+
+		if (pl->InCond(TF_COND_STEALTHED) || pl->IsInvulnerable())
+			continue;
+
+		if (CFG::AutoUber_AutoHeal_Friends_Only && !isFriend(pl))
+			continue;
+
+		const float flPercent = getHealthPercent(pl);
+
+		CTraceFilterHitscan filter{};
+		trace_t tr{};
+		H::AimUtils->Trace(local->GetShootPos(), pl->GetCenter(), (MASK_SHOT & ~CONTENTS_HITBOX), &filter, &tr);
+
+		if (tr.fraction <= 0.99f && tr.m_pEnt != pl)
+			continue;
+
+		// Track best target that NEEDS healing (not full health)
+		if (flPercent < 0.99f && flPercent < flLowestHealth)
+		{
+			pBestTargetNeedsHealing = pl;
+			flLowestHealth = flPercent;
+			flBestDist = flDist;
+		}
+
+		// Also track closest target as fallback (even if full health)
+		if (!pBestTarget || flDist < flBestDist)
+		{
+			pBestTarget = pl;
+			flBestDist = flDist;
+		}
+	}
+
+	// Prioritize targets that need healing over full health targets
+	C_TFPlayer* pFinalTarget = pBestTargetNeedsHealing ? pBestTargetNeedsHealing : pBestTarget;
+
+	if (pFinalTarget)
+	{
+		// Aim at target to acquire beam lock
+		const auto angle = Math::CalcAngle(local->GetShootPos(), pFinalTarget->GetCenter());
+		H::AimUtils->FixMovement(cmd, angle);
+		cmd->viewangles = angle;
+		cmd->buttons |= IN_ATTACK;
+
+		if (CFG::Misc_Accuracy_Improvements)
+			cmd->tick_count = TIME_TO_TICKS(pFinalTarget->m_flSimulationTime() + SDKUtils::GetLerp());
+
+		// Use bSilentAngles (view restore only) — NOT bPSilentAngles which chokes packets
+		G::bSilentAngles = true;
 	}
 	else
 	{
-		nCachedTargetIndex = 0;
-		pCachedTarget = nullptr;
+		// No target found — release attack to detach any stale beam
+		cmd->buttons &= ~IN_ATTACK;
 	}
-
-	// Full target search (only every 5 ticks)
-	if (bShouldUpdateTarget)
-	{
-		nLastUpdateTick = nCurrentTick;
-		
-		C_TFPlayer* pBestTarget = nullptr;
-		float flLowestHealth = 1.0f;
-
-		for (const auto ent : H::Entities->GetGroup(EEntGroup::PLAYERS_TEAMMATES))
-		{
-			if (!ent) continue;
-			auto pl = ent->As<C_TFPlayer>();
-			
-			// Quick check first (no trace)
-			if (!isQuickValid(pl)) continue;
-			
-			float flPercent = getHealthPercent(pl);
-			if (flPercent >= 0.99f) continue;
-			
-			// Skip non-friends if Friends Only is enabled
-			if (CFG::AutoUber_AutoHeal_Friends_Only && !isFriend(pl))
-				continue;
-			
-			if (flPercent < flLowestHealth && isFullyValid(pl))
-			{
-				pBestTarget = pl;
-				flLowestHealth = flPercent;
-			}
-		}
-		
-		// Store entity index instead of raw pointer
-		nCachedTargetIndex = pBestTarget ? pBestTarget->entindex() : 0;
-		pCachedTarget = pBestTarget;
-		
-		// Only send attack command on update ticks to reduce server spam
-		if (pCachedTarget)
-		{
-			const auto angle = Math::CalcAngle(local->GetShootPos(), pCachedTarget->GetCenter());
-			H::AimUtils->FixMovement(cmd, angle);
-			cmd->viewangles = angle;
-			cmd->buttons |= IN_ATTACK;
-			G::bPSilentAngles = true;
-			
-			if (CFG::Misc_Accuracy_Improvements)
-				cmd->tick_count = TIME_TO_TICKS(pCachedTarget->m_flSimulationTime() + SDKUtils::GetLerp());
-		}
-	}
-	
-	// On non-update ticks, don't send any commands - let the medigun continue healing naturally
 }
 
 void CMisc::MovementLock(CUserCmd* cmd)
@@ -1484,9 +1536,27 @@ void CMisc::AutoUber(CUserCmd* cmd)
         return flTotalDamage;
     };
 
-    bool bShouldPop = false;
+    // Throttle expensive threat scans to every 10 ticks (~167ms at 60tick)
+    // Threat situation doesn't change significantly between scans
+    static int nLastThreatTick = 0;
+    static bool bCachedShouldPop = false;
+    static int nCachedLocalHP = 0;
+    static int nCachedTargetHP = 0;
 
-    // Sniper sightline check - only pop if sniper can one-shot us
+    const int nCurrentTick = I::GlobalVars->tickcount;
+    const bool bShouldRescan = (nCurrentTick - nLastThreatTick >= 10) || (nLastThreatTick == 0);
+
+    // Cheap fast path: if health dropped suddenly since last scan, pop immediately
+    const bool bLocalHPDrop = (hpLocal < nCachedLocalHP - 30);
+    const bool bTargetHPDrop = pHealTarget && (hpTarget < nCachedTargetHP - 30);
+
+    if (bShouldRescan)
+    {
+        nLastThreatTick = nCurrentTick;
+        nCachedLocalHP = hpLocal;
+        nCachedTargetHP = hpTarget;
+
+        bool bShouldPop = false;
     auto isSniperSightlineDanger = [&](C_TFPlayer* who) -> bool
     {
         if (!CFG::AutoUber_SniperSightline_Check || !who)
@@ -1590,6 +1660,12 @@ void CMisc::AutoUber(CUserCmd* cmd)
         if (isSniperSightlineDanger(pLocal) || (pHealTarget && isSniperSightlineDanger(pHealTarget)))
             bShouldPop = true;
     }
+
+        bCachedShouldPop = bShouldPop;
+    }
+
+    // Use cached threat result + cheap HP drop fast path
+    const bool bShouldPop = bCachedShouldPop || bLocalHPDrop || bTargetHPDrop;
 
     if (bShouldPop && canPop())
     {
@@ -1826,4 +1902,171 @@ void CMisc::AutoFaN(CUserCmd* pCmd)
 	G::bSilentAngles = true;
 	pCmd->viewangles = vShootAngles;
 	pCmd->buttons |= IN_ATTACK;
+}
+
+// === Class Switch on Death ===
+// State machine: IDLE → SWITCHING_BACK → IDLE
+//
+// On instant-respawn servers, switching class triggers an immediate respawn
+// and bypasses the killcam wait.
+// 1. Detect death → joinclass scout;joinclass <original>;joinclass <original>;...
+//    The semicolons let the server process multiple commands in one tick.
+//    If the server only processes the first, we respawn as scout → SWITCHING_BACK
+// 2. SWITCHING_BACK: keep sending joinclass <original> every tick until we respawn
+//    as the original class. Since joining the class you already are does nothing,
+//    spamming is harmless and ensures the server eventually gets the message.
+void CMisc::FastClassSwitch()
+{
+	if (!CFG::Misc_Auto_FastClassSwitch)
+	{
+		m_iFCSState = FCS_IDLE;
+		m_bFCSWasAlive = false;
+		m_iFCSOriginalClass = 0;
+		return;
+	}
+
+	const auto pLocal = H::Entities->GetLocal();
+	if (!pLocal)
+	{
+		m_iFCSState = FCS_IDLE;
+		m_bFCSWasAlive = false;
+		m_iFCSOriginalClass = 0;
+		return;
+	}
+
+	// Only run if on a valid team (Blue or Red) — don't send joinclass while in team selection
+	int iTeam = pLocal->m_iTeamNum();
+	if (iTeam != TF_TEAM_BLUE && iTeam != TF_TEAM_RED)
+	{
+		m_iFCSState = FCS_IDLE;
+		m_bFCSWasAlive = false;
+		m_iFCSOriginalClass = 0;
+		return;
+	}
+
+	bool bIsAlive = pLocal->IsAlive();
+	int iCurrentClass = pLocal->m_iClass();
+
+	static const char* szClassNames[] = {
+		"scout", "sniper", "soldier", "demoman",
+		"medic", "heavyweapons", "pyro", "spy", "engineer"
+	};
+
+	switch (m_iFCSState)
+	{
+	case FCS_IDLE:
+	{
+		// Detect death: was alive last tick, now dead
+		if (m_bFCSWasAlive && !bIsAlive)
+		{
+			if (iCurrentClass >= TF_CLASS_SCOUT && iCurrentClass <= TF_CLASS_ENGINEER)
+			{
+				int iSwitchClass = (iCurrentClass == TF_CLASS_SCOUT) ? TF_CLASS_SOLDIER : TF_CLASS_SCOUT;
+
+				m_iFCSOriginalClass = iCurrentClass;
+				m_iFCSState = FCS_SWITCHING_BACK;
+				m_flFCSSendTime = I::GlobalVars->curtime;
+
+				// Send joinclass scout followed by joinclass <original> multiple times.
+				// The server may process multiple semicolon-separated commands per tick.
+				// If it only processes the first one, we'll respawn as scout and the
+				// SWITCHING_BACK state will keep trying every tick.
+				// Sending joinclass <original> multiple times is safe because if we're
+				// already that class, the server just ignores it.
+				I::EngineClient->ClientCmd_Unrestricted(std::format("joinclass {};joinclass {};joinclass {};joinclass {}",
+					szClassNames[iSwitchClass - 1],
+					szClassNames[iCurrentClass - 1],
+					szClassNames[iCurrentClass - 1],
+					szClassNames[iCurrentClass - 1]).c_str());
+			}
+		}
+		break;
+	}
+
+	case FCS_SWITCHING_BACK:
+	{
+		if (bIsAlive)
+		{
+			if (iCurrentClass == m_iFCSOriginalClass)
+			{
+				// Respawned as the right class — done!
+				m_iFCSState = FCS_IDLE;
+				m_iFCSOriginalClass = 0;
+			}
+			else if (I::GlobalVars->curtime >= m_flFCSSendTime + 0.5f)
+			{
+				// Respawned as wrong class — send joinclass original again (throttled).
+				// On instant-respawn servers this triggers another respawn.
+				if (m_iFCSOriginalClass >= TF_CLASS_SCOUT && m_iFCSOriginalClass <= TF_CLASS_ENGINEER)
+				{
+					I::EngineClient->ClientCmd_Unrestricted(std::format("joinclass {}", szClassNames[m_iFCSOriginalClass - 1]).c_str());
+					m_flFCSSendTime = I::GlobalVars->curtime;
+				}
+			}
+		}
+		else if (I::GlobalVars->curtime >= m_flFCSSendTime + 0.5f)
+		{
+			// Still dead — resend joinclass original (throttled to 0.5s).
+			if (m_iFCSOriginalClass >= TF_CLASS_SCOUT && m_iFCSOriginalClass <= TF_CLASS_ENGINEER)
+			{
+				I::EngineClient->ClientCmd_Unrestricted(std::format("joinclass {}", szClassNames[m_iFCSOriginalClass - 1]).c_str());
+				m_flFCSSendTime = I::GlobalVars->curtime;
+			}
+		}
+		break;
+	}
+	}
+
+	// Update alive tracking
+	m_bFCSWasAlive = bIsAlive;
+}
+
+void CMisc::VoiceCommandSpam()
+{
+	if (!CFG::Misc_Auto_VoiceCommand_Spam)
+		return;
+
+	const auto pLocal = H::Entities->GetLocal();
+	if (!pLocal || pLocal->deadflag())
+		return;
+
+	static float flLastVoiceTime = 0.0f;
+	float flCurrentTime = static_cast<float>(Plat_FloatTime());
+	if (flCurrentTime - flLastVoiceTime < 6.5f)
+		return;
+
+	flLastVoiceTime = flCurrentTime;
+
+	switch (CFG::Misc_Auto_VoiceCommand_Spam_Command)
+	{
+	case 0: // Random
+	{
+		int iMenu = rand() % 3;
+		int iCommand = rand() % 9;
+		std::string sCmd = "voicemenu " + std::to_string(iMenu) + " " + std::to_string(iCommand);
+		I::EngineClient->ClientCmd_Unrestricted(sCmd.c_str());
+		break;
+	}
+	case 1:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 0"); break; // Medic
+	case 2:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 1"); break; // Thanks
+	case 3:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 2 6"); break; // Nice Shot
+	case 4:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 2 2"); break; // Cheers
+	case 5:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 2 3"); break; // Jeers
+	case 6:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 2"); break; // Go Go Go
+	case 7:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 3"); break; // Move Up
+	case 8:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 4"); break; // Go Left
+	case 9:  I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 5"); break; // Go Right
+	case 10: I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 6"); break; // Yes
+	case 11: I::EngineClient->ClientCmd_Unrestricted("voicemenu 0 7"); break; // No
+	case 12: I::EngineClient->ClientCmd_Unrestricted("voicemenu 1 0"); break; // Incoming
+	case 13: I::EngineClient->ClientCmd_Unrestricted("voicemenu 1 1"); break; // Spy
+	case 14: I::EngineClient->ClientCmd_Unrestricted("voicemenu 1 2"); break; // Sentry Ahead
+	case 15: I::EngineClient->ClientCmd_Unrestricted("voicemenu 1 3"); break; // Need Teleporter
+	case 16: I::EngineClient->ClientCmd_Unrestricted("voicemenu 1 4"); break; // Pootis
+	case 17: I::EngineClient->ClientCmd_Unrestricted("voicemenu 1 5"); break; // Need Sentry
+	case 18: I::EngineClient->ClientCmd_Unrestricted("voicemenu 1 6"); break; // Activate Charge
+	case 19: I::EngineClient->ClientCmd_Unrestricted("voicemenu 2 0"); break; // Help
+	case 20: I::EngineClient->ClientCmd_Unrestricted("voicemenu 2 1"); break; // Battle Cry
+	default: break;
+	}
 }

@@ -13,12 +13,17 @@
 #include "../Features/SeedPred/SeedPred.h"
 #include "../Features/Crits/Crits.h"
 #include "../Features/FakeLag/FakeLag.h"
+#include "../Features/FakeLagFix/FakeLagFix.h"
 #include "../Features/FakeAngle/FakeAngle.h"
+#include "../Features/Networking/Networking.h"
 #include "../Features/ProjectileDodge/ProjectileDodge.h"
+#include "../Features/NavBot/NavBot.h"
+#include "../Features/NavBot/NavEngine/NavEngine.h"
 #include "../Features/Misc/AntiCheatCompat/AntiCheatCompat.h"
 #include "../Features/amalgam_port/AmalgamCompat.h"
 #include "../Features/amalgam_port/Ticks/Ticks.h"
 #include "../Features/Players/Players.h"
+#include "../../Utils/CrashHandler/CrashHandler.h"
 
 // Taunt delay processing - defined in IVEngineClient013_ClientCmd.cpp
 extern void ProcessTauntDelay();
@@ -87,10 +92,17 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	if (G::bLevelTransition)
 		return CALL_ORIGINAL(ecx, flInputSampleTime, pCmd);
 
+	// Crash context: track which hook is running
+	F::CrashHandler->s_Context.m_pszLastHook = "CreateMove";
+	F::CrashHandler->s_Context.m_bLevelTransition = G::bLevelTransition;
+	if (pCmd)
+		F::CrashHandler->s_Context.m_nCommandNumber = pCmd->command_number;
+
 	// Reset per-frame state
 	G::bSilentAngles = false;
 	G::bPSilentAngles = false;
 	G::bFiring = false;
+	G::bAutoScopeWaitActive = false;
 	G::Attacking = 0;
 	G::Throwing = false;
 	G::LastUserCmd = G::CurrentUserCmd ? G::CurrentUserCmd : pCmd;
@@ -166,6 +178,7 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 		auto pWeapon = H::Entities->GetWeapon();
 		if (pLocal && pWeapon && !pLocal->deadflag())
 		{
+			F::CrashHandler->s_Context.m_pszLastFeature = "CritHack";
 			F::CritHack->Run(pLocal, pWeapon, pCmd);
 		}
 
@@ -179,12 +192,15 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 		return CALL_ORIGINAL(ecx, flInputSampleTime, pCmd);
 	}
 
-	bool* pSendPacket = reinterpret_cast<bool*>(uintptr_t(_AddressOfReturnAddress()) + 0x128);
-
 	// Cache original angles/movement for pSilent restoration
 	const Vec3 vOldAngles = pCmd->viewangles;
 	const float flOldSide = pCmd->sidemove;
 	const float flOldForward = pCmd->forwardmove;
+
+	// Use Networking's bSendPacket instead of the stack hack
+	// The rebuilt CL_Move reads this to decide whether to send or choke
+	bool& bSendPacket = F::Networking->bSendPacket;
+	bSendPacket = true;
 
 	auto pLocal = H::Entities->GetLocal();
 	auto pWeapon = H::Entities->GetWeapon();
@@ -252,7 +268,7 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	G::bCanSecondaryAttack = false;
 	G::bReloading = false;
 
-	if (pLocal && pWeapon)
+	if (pLocal && pWeapon && H::Entities->IsEntityValid(pWeapon))
 	{
 		G::bCanHeadshot = pWeapon->CanHeadShot(pLocal);
 
@@ -356,6 +372,7 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	F::Misc->FastStop(pCmd);
 	F::Misc->FastAccelerate(pCmd);
 	F::Misc->NoiseMakerSpam();
+	F::Misc->VoiceCommandSpam();
 	F::Misc->AutoRocketJump(pCmd);
 	F::Misc->AutoFaN(pCmd);
 	F::Misc->AutoUber(pCmd);
@@ -363,20 +380,50 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	F::Misc->MovementLock(pCmd);
 	F::Misc->MvmInstaRespawn();
 	F::Misc->AntiAFK(pCmd);
+	if (CFG::Misc_Auto_FastClassSwitch)
+		F::Misc->FastClassSwitch();
+
+	// Nav Bot - auto-reset nav engine on map change and run bot logic
+	if (CFG::NavBot_Enabled)
+	{
+		if (!G_NavEngine.IsReady())
+			G_NavEngine.Reset();
+		g_NavBot.Run(pLocal, pCmd);
+
+		// Re-fetch pLocal after NavBot - AutoJoinTeam/AutoJoinClass may send
+		// ClientCmd_Unrestricted commands that change player state (team/class),
+		// which can invalidate the cached pLocal pointer
+		pLocal = H::Entities->GetLocal();
+		pWeapon = H::Entities->GetWeapon();
+	}
+	else if (g_NavBot.IsActive())
+	{
+		g_NavBot.Stop();
+	}
 
 	// Projectile Dodge
-	F::ProjectileDodge->Run(pLocal, pCmd);
+	if (pLocal)
+		F::ProjectileDodge->Run(pLocal, pCmd);
 
 	// ============================================
 	// AMALGAM ORDER: Engine Prediction Start
 	// ============================================
+	if (!pLocal)
+	{
+		// No valid local player — skip all prediction-dependent features
+		F::EnginePrediction->Start(nullptr, pCmd);
+		F::EnginePrediction->End(nullptr, pCmd);
+		// Jump to after prediction block
+		goto AfterPrediction;
+	}
+
 	F::EnginePrediction->Start(pLocal, pCmd);
 	{
 		// Choke on bhop
 		if (CFG::Misc_Choke_On_Bhop && CFG::Misc_Bunnyhop)
 		{
 			if ((pLocal->m_fFlags() & FL_ONGROUND) && !(F::EnginePrediction->flags & FL_ONGROUND))
-				*pSendPacket = false;
+				bSendPacket = false;
 		}
 
 		F::Misc->CrouchWhileAirborne(pCmd);
@@ -386,7 +433,19 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 		F::AmalgamTicks->SaveShootPos(pLocal);
 		
 		F::Misc->AutoMedigun(pCmd);
+		F::FakeLagFix->Update();  // Update choke tracking before aimbot uses it
+
+		F::CrashHandler->s_Context.m_pszLastFeature = "Aimbot";
 		F::Aimbot->Run(pCmd);
+
+		if (!pLocal || !pWeapon
+			|| !H::Entities->SafeIsEntityValid(pLocal, I::EngineClient->GetLocalPlayer())
+			|| !H::Entities->IsEntityValid(pWeapon))
+		{
+			// Entity destroyed during aimbot — skip remaining features
+			F::EnginePrediction->End(nullptr, pCmd);
+			goto AfterPrediction;
+		}
 
 		// IMPORTANT: Update G::Attacking AFTER aimbot runs
 		// Aimbot may have added IN_ATTACK, so we need to re-check
@@ -396,6 +455,7 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 		// CritHack after aimbot - pass pCmd directly so it sees the aimbot's changes
 		F::CritHack->Run(pLocal, pWeapon, pCmd);
 
+		F::CrashHandler->s_Context.m_pszLastFeature = "Triggerbot";
 		F::Triggerbot->Run(pCmd);
 	}
 	// NOTE: EnginePrediction.End is called AFTER anti-aim (like Amalgam)
@@ -481,17 +541,17 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	// ============================================
 	// AMALGAM ORDER: PacketManip (FakeLag + AntiAim packet check)
 	// ============================================
-	*pSendPacket = true;
-	F::FakeLag->Run(pLocal, pWeapon, pCmd, pSendPacket);
+	bSendPacket = true;
+	F::FakeLag->Run(pLocal, pWeapon, pCmd, &bSendPacket);
 	F::FakeLag->UpdateDrawChams(); // Update fake model visibility based on actual fakelag state
 
 	// Anti-aim choking - ShouldRun already checks G::Attacking == 1
 	if (AntiAimCheck(pLocal, pWeapon, pCmd))
-		*pSendPacket = false;
+		bSendPacket = false;
 
 	// Prevent overchoking
 	if (I::ClientState->chokedcommands > 21)
-		*pSendPacket = true;
+		bSendPacket = true;
 
 	// pSilent handling - MUST run BEFORE RapidFire (like reference project)
 	// This ensures RapidFire saves the command with aimbot angles, not restored angles
@@ -499,14 +559,14 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 		static bool bWasSet = false;
 		if (G::bPSilentAngles)
 		{
-			*pSendPacket = false;
+			bSendPacket = false;
 			bWasSet = true;
 		}
 		else
 		{
 			if (bWasSet && !G::bSilentAngles)
 			{
-				*pSendPacket = true;
+				bSendPacket = true;
 				pCmd->viewangles = vOldAngles;
 				pCmd->sidemove = flOldSide;
 				pCmd->forwardmove = flOldForward;
@@ -522,23 +582,25 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	// ============================================
 	// RapidFire/Ticks management - AFTER pSilent handling (like reference)
 	// ============================================
-	F::RapidFire->RunFastSticky(pCmd, pSendPacket);  // Fast sticky shooting key (runs first)
-	F::RapidFire->Run(pCmd, pSendPacket);
+	F::RapidFire->RunFastSticky(pCmd, &bSendPacket);  // Fast sticky shooting key (runs first)
+	F::RapidFire->Run(pCmd, &bSendPacket);
 
 	// ============================================
 	// AMALGAM ORDER: AntiAim.Run
 	// ============================================
-	F::FakeAngle->Run(pCmd, pLocal, pWeapon, *pSendPacket, vOldAngles);
+	F::FakeAngle->Run(pCmd, pLocal, pWeapon, bSendPacket, vOldAngles);
 
 	// ============================================
 	// AMALGAM ORDER: EnginePrediction.End (AFTER anti-aim)
 	// ============================================
 	F::EnginePrediction->End(pLocal, pCmd);
 
+AfterPrediction:
+
 	// ============================================
 	// AMALGAM ORDER: AntiCheatCompatibility
 	// ============================================
-	F::AntiCheatCompat->ProcessCommand(pCmd, pSendPacket);
+	F::AntiCheatCompat->ProcessCommand(pCmd, &bSendPacket);
 
 	// If anti-cheat modified angles, we need to restore view to original
 	// The modified angles are sent to server, but player should see original view
@@ -548,15 +610,15 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	}
 
 	// Store bones when packet is sent (for fakelag visualization)
-	if (*pSendPacket)
+	if (bSendPacket)
 		F::FakeAngle->StoreSentBones(pLocal);
 
 	// ============================================
 	// AMALGAM ORDER: LocalAnimations (at the very end)
 	// ============================================
-	LocalAnimations(pLocal, pCmd, *pSendPacket);
+	LocalAnimations(pLocal, pCmd, bSendPacket);
 
-	G::bChoking = !*pSendPacket;
+	G::bChoking = !bSendPacket;
 	G::nOldButtons = pCmd->buttons;
 	G::vUserCmdAngles = pCmd->viewangles;
 

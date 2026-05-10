@@ -42,6 +42,11 @@ void CTF2Glow::Run()
 		// Check if we already have a glow for this entity
 		for (auto& glowEntity : m_vecGlowEntities)
 		{
+			// Skip entries with dangling pointers (entity destroyed on class change)
+			// They'll be cleaned up in the removal loop at the end of Run()
+			if (!glowEntity.m_pEntity || !H::Entities->IsEntityValid(glowEntity.m_pEntity))
+				continue;
+
 			if (glowEntity.m_pEntity == pEntity)
 			{
 				// Update existing glow
@@ -266,11 +271,12 @@ void CTF2Glow::Run()
 		}
 	}
 
-	// Remove glow objects for entities that weren't seen this frame
-	// (they went off screen, died, etc.)
+	// Remove glow objects for entities that weren't seen this frame or have dangling pointers
+	// (they went off screen, died, class changed, etc.)
 	for (auto it = m_vecGlowEntities.begin(); it != m_vecGlowEntities.end();)
 	{
-		if (!it->m_bSeenThisFrame)
+		// Check if entity pointer is still valid (prevents dangling pointer after class change)
+		if (!it->m_pEntity || !H::Entities->IsEntityValid(it->m_pEntity) || !it->m_bSeenThisFrame)
 		{
 			// Unregister from glow manager
 			if (it->m_nGlowIndex >= 0 && it->m_nGlowIndex < pGlowManager->m_GlowObjectDefinitions.Count())

@@ -314,6 +314,16 @@ int CCritHack::GetCritRequest(CUserCmd* pCmd, C_TFWeaponBase* pWeapon)
 		if (pEntity && pEntity->GetClassId() == ETFClassIds::CTFPlayer)
 			bPressed = true;
 	}
+
+	// Always Melee Crit checkbox (ported from Amalgam)
+	// Only forces crits when the melee aimbot is actively targeting a player
+	// Manual swings (mouse1 without aimbot) are NOT forced to crit
+	if (CFG::Aimbot_Melee_Always_Crit && m_bMelee && G::nTargetIndex)
+	{
+		auto pEntity = I::ClientEntityList->GetClientEntity(G::nTargetIndex);
+		if (pEntity && pEntity->GetClassId() == ETFClassIds::CTFPlayer)
+			bPressed = true;
+	}
 	
 	bool bSkip = CFG::Exploits_Crits_Skip_Random_Crits;
 	bool bDesync = CommandToSeed(pCmd->command_number) == pWeapon->m_iCurrentSeed();
@@ -654,7 +664,6 @@ void CCritHack::Event(IGameEvent* pEvent, uint32_t uHash)
 		Reset();
 	}
 }
-
 
 // Draggable indicator logic
 void CCritHack::Drag()
@@ -1058,4 +1067,5 @@ void CCritHack::Draw()
 		H::Draw->String(font, nLeftX, nDrawY, {150, 150, 150, 255}, POS_DEFAULT,
 			std::format("B:{:.0f}", pWeapon->m_flCritTokenBucket()).c_str());
 	}
+
 }

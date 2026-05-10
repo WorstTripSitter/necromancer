@@ -5,6 +5,7 @@
 #include "../../TF2/CTFPartyClient.h"
 #include "../../TF2/CTFGCClientSystem.h"
 #include "../../TF2/c_tf_playerresource.h"
+#include "../../../App/Features/CFG.h"
 #include <set>
 
 C_TFPlayer* CEntityHelper::GetLocal()
@@ -244,10 +245,33 @@ void CEntityHelper::UpdateCache()
 	static bool bFirstRun = true;
 	if (bFirstRun)
 	{
-		for (auto& group : m_mapGroups | std::views::values)
-			group.reserve(64);
+		for (int i = 0; i < static_cast<int>(EEntGroup::COUNT); i++)
+			m_mapGroups[i].reserve(64);
+		
 		bFirstRun = false;
 	}
+
+	// Pre-compute class-aware minimal entity flags
+	const int nLocalClass = pLocal->m_iClass();
+	const auto pLocalWeaponEnt = pLocal->m_hActiveWeapon().Get();
+	const auto pLocalWeapon = pLocalWeaponEnt ? pLocalWeaponEnt->As<C_TFWeaponBase>() : nullptr;
+	const int nLocalWeaponID = pLocalWeapon ? pLocalWeapon->GetWeaponID() : 0;
+	const int nLocalWeaponDefIndex = pLocalWeapon ? pLocalWeapon->m_iItemDefinitionIndex() : 0;
+
+	// Pyro with flamethrower (not Phlogistinator) needs projectiles for airblast
+	const bool bPyroCanAirblast = CFG::Perf_Minimal_Entities
+		&& nLocalClass == TF_CLASS_PYRO
+		&& (nLocalWeaponID == TF_WEAPON_FLAMETHROWER || nLocalWeaponID == TF_WEAPON_FLAME_BALL)
+		&& nLocalWeaponDefIndex != Pyro_m_ThePhlogistinator;
+
+	// Demoman always cares about stickies (own for DT, enemy for awareness)
+	const bool bDemoCareStickies = CFG::Perf_Minimal_Entities
+		&& nLocalClass == TF_CLASS_DEMOMAN;
+
+	// Engineer with melee needs to see teammate buildings and own buildings
+	const bool bEngieMeleeCareBuildings = CFG::Perf_Minimal_Entities
+		&& nLocalClass == TF_CLASS_ENGINEER
+		&& pLocalWeapon && pLocalWeapon->GetSlot() == 2; // WEAPON_SLOT_MELEE
 
 	// Pre-fetch client entity list pointer to avoid repeated virtual calls
 	IClientEntityList* pEntityList = I::ClientEntityList;
@@ -283,28 +307,49 @@ void CEntityHelper::UpdateCache()
 		case ETFClassIds::CTFPlayer:
 		{
 			const auto pPlayer = pEntity->As<C_TFPlayer>();
-			if (pPlayer->deadflag() && pPlayer->m_iObserverMode() != OBS_MODE_NONE)
-				m_mapGroups[EEntGroup::PLAYERS_OBSERVER].push_back(pEntity);
 
 			int nPlayerTeam = 0;
 			if (!pEntity->IsInValidTeam(&nPlayerTeam))
 				continue;
 
-			m_mapGroups[EEntGroup::PLAYERS_ALL].push_back(pEntity);
-			m_mapGroups[nLocalTeam != nPlayerTeam ? EEntGroup::PLAYERS_ENEMIES : EEntGroup::PLAYERS_TEAMMATES].push_back(pEntity);
+			// PERF: Skip teammate players — only care about enemies in minimal mode
+			if (CFG::Perf_Minimal_Entities && nLocalTeam == nPlayerTeam)
+				break;
+
+			if (pPlayer->deadflag() && pPlayer->m_iObserverMode() != OBS_MODE_NONE)
+				m_mapGroups[static_cast<int>(EEntGroup::PLAYERS_OBSERVER)].push_back(pEntity);
+
+			m_mapGroups[static_cast<int>(EEntGroup::PLAYERS_ALL)].push_back(pEntity);
+			m_mapGroups[static_cast<int>(nLocalTeam != nPlayerTeam ? EEntGroup::PLAYERS_ENEMIES : EEntGroup::PLAYERS_TEAMMATES)].push_back(pEntity);
 			break;
 		}
 
-		case ETFClassIds::CObjectSentrygun:
 		case ETFClassIds::CObjectDispenser:
 		case ETFClassIds::CObjectTeleporter:
 		{
+			// PERF: Skip dispensers and teleporters in minimal mode
+			// Exception: Engineer holding melee needs to see teammate/own buildings
+			if (CFG::Perf_Minimal_Entities && !bEngieMeleeCareBuildings)
+				break;
+			[[fallthrough]]; // Fall through to sentry handling when not skipped
+		}
+		case ETFClassIds::CObjectSentrygun:
+		{
+			// EXTREME: Skip ALL building caching
+			if (CFG::Perf_Extreme_Limit_Entity_Cache)
+				break;
+
 			int nObjectTeam = 0;
 			if (!pEntity->IsInValidTeam(&nObjectTeam))
 				continue;
 
-			m_mapGroups[EEntGroup::BUILDINGS_ALL].push_back(pEntity);
-			m_mapGroups[nLocalTeam != nObjectTeam ? EEntGroup::BUILDINGS_ENEMIES : EEntGroup::BUILDINGS_TEAMMATES].push_back(pEntity);
+			// PERF: Skip teammate buildings in minimal mode
+			// Exception: Engineer holding melee needs teammate/own buildings
+			if (CFG::Perf_Minimal_Entities && !bEngieMeleeCareBuildings && nLocalTeam == nObjectTeam)
+				break;
+
+			m_mapGroups[static_cast<int>(EEntGroup::BUILDINGS_ALL)].push_back(pEntity);
+			m_mapGroups[static_cast<int>(nLocalTeam != nObjectTeam ? EEntGroup::BUILDINGS_ENEMIES : EEntGroup::BUILDINGS_TEAMMATES)].push_back(pEntity);
 			break;
 		}
 
@@ -322,43 +367,95 @@ void CEntityHelper::UpdateCache()
 		case ETFClassIds::CTFProjectile_EnergyRing:
 		case ETFClassIds::CTFProjectile_EnergyBall:
 		{
+			// EXTREME: Skip ALL projectile caching
+			if (CFG::Perf_Extreme_Limit_Entity_Cache)
+				break;
+
 			int nProjectileTeam = 0;
 			if (!pEntity->IsInValidTeam(&nProjectileTeam))
 				continue;
+
+			// PERF: In minimal mode, class-aware projectile filtering:
+			// - Pyro with flamethrower (not Phlogistinator): cache all projectiles (for airblast)
+			// - Demoman: cache all stickies (own for DT, enemy for awareness)
+			// - Otherwise: only cache local player's stickies (for sticky DT)
+			if (CFG::Perf_Minimal_Entities)
+			{
+				if (bPyroCanAirblast)
+				{
+					// Pyro needs all projectiles for airblast — cache them
+				}
+				else if (bDemoCareStickies && nClassId == ETFClassIds::CTFGrenadePipebombProjectile)
+				{
+					// Demoman cares about all stickies — cache them
+				}
+				else
+				{
+					// Default minimal: only local player's own stickies
+					if (nClassId == ETFClassIds::CTFGrenadePipebombProjectile)
+					{
+						const auto pPipebomb = pEntity->As<C_TFGrenadePipebombProjectile>();
+						if (pPipebomb->HasStickyEffects() && pPipebomb->As<C_BaseGrenade>()->m_hThrower().Get() == pLocal)
+							m_mapGroups[static_cast<int>(EEntGroup::PROJECTILES_LOCAL_STICKIES)].push_back(pEntity);
+					}
+					break;
+				}
+			}
 
 			if (nClassId == ETFClassIds::CTFGrenadePipebombProjectile)
 			{
 				const auto pPipebomb = pEntity->As<C_TFGrenadePipebombProjectile>();
 				if (pPipebomb->HasStickyEffects() && pPipebomb->As<C_BaseGrenade>()->m_hThrower().Get() == pLocal)
-					m_mapGroups[EEntGroup::PROJECTILES_LOCAL_STICKIES].push_back(pEntity);
+					m_mapGroups[static_cast<int>(EEntGroup::PROJECTILES_LOCAL_STICKIES)].push_back(pEntity);
 			}
 
-			m_mapGroups[EEntGroup::PROJECTILES_ALL].push_back(pEntity);
-			m_mapGroups[nLocalTeam != nProjectileTeam ? EEntGroup::PROJECTILES_ENEMIES : EEntGroup::PROJECTILES_TEAMMATES].push_back(pEntity);
+			m_mapGroups[static_cast<int>(EEntGroup::PROJECTILES_ALL)].push_back(pEntity);
+			m_mapGroups[static_cast<int>(nLocalTeam != nProjectileTeam ? EEntGroup::PROJECTILES_ENEMIES : EEntGroup::PROJECTILES_TEAMMATES)].push_back(pEntity);
 			break;
 		}
 
 		case ETFClassIds::CBaseAnimating:
 		{
+			// EXTREME: Skip pickup caching
+			if (CFG::Perf_Extreme_Limit_Entity_Cache)
+				break;
+
 			if (IsHealthPack(pEntity))
-				m_mapGroups[EEntGroup::HEALTHPACKS].push_back(pEntity);
+				m_mapGroups[static_cast<int>(EEntGroup::HEALTHPACKS)].push_back(pEntity);
 			else if (IsAmmoPack(pEntity))
-				m_mapGroups[EEntGroup::AMMOPACKS].push_back(pEntity);
+			{
+				// PERF: Skip ammo packs in minimal mode
+				if (!CFG::Perf_Minimal_Entities)
+					m_mapGroups[static_cast<int>(EEntGroup::AMMOPACKS)].push_back(pEntity);
+			}
 			break;
 		}
 
 		case ETFClassIds::CTFAmmoPack:
-			m_mapGroups[EEntGroup::AMMOPACKS].push_back(pEntity);
+		{
+			if (CFG::Perf_Extreme_Limit_Entity_Cache)
+				break;
+			// PERF: Skip ammo packs in minimal mode
+			if (CFG::Perf_Minimal_Entities)
+				break;
+			m_mapGroups[static_cast<int>(EEntGroup::AMMOPACKS)].push_back(pEntity);
 			break;
+		}
 
 		case ETFClassIds::CHalloweenGiftPickup:
-			m_mapGroups[EEntGroup::HALLOWEEN_GIFT].push_back(pEntity);
+		{
+			if (CFG::Perf_Extreme_Limit_Entity_Cache)
+				break;
+			m_mapGroups[static_cast<int>(EEntGroup::HALLOWEEN_GIFT)].push_back(pEntity);
 			break;
+		}
 
 		case ETFClassIds::CCurrencyPack:
 		{
+			if (CFG::Perf_Extreme_Limit_Entity_Cache)
+				break;
 			if (!pEntity->As<C_CurrencyPack>()->m_bDistributed())
-				m_mapGroups[EEntGroup::MVM_MONEY].push_back(pEntity);
+				m_mapGroups[static_cast<int>(EEntGroup::MVM_MONEY)].push_back(pEntity);
 			break;
 		}
 
@@ -403,8 +500,6 @@ void CEntityHelper::UpdateModelIndexes()
 
 void CEntityHelper::ClearCache()
 {
-	for (auto& group : m_mapGroups | std::views::values)
-	{
-		group.clear();
-	}
+	for (int i = 0; i < static_cast<int>(EEntGroup::COUNT); i++)
+		m_mapGroups[i].clear();
 }

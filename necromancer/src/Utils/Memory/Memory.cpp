@@ -1,6 +1,8 @@
 #include "Memory.h"
 #include <format>
 
+#pragma comment(lib, "Psapi.lib")
+
 #define INRANGE(x, a, b) (x >= a && x <= b) 
 #define GetBits(x) (INRANGE((x & (~0x20)),'A','F') ? ((x & (~0x20)) - 'A' + 0xA) : (INRANGE(x,'0','9') ? x - '0' : 0))
 #define GetBytes(x) (GetBits(x[0]) << 4 | GetBits(x[1]))
@@ -51,7 +53,12 @@ std::vector<int> pattern_to_byte(const char *pattern)
 
 std::uintptr_t Memory::FindSignature(const char *szModule, const char *szPattern)
 {
-	if (const auto hMod = GetModuleHandleA(szModule))
+	// Try GetModuleHandle first (DLL already loaded), then LoadLibrary (DLL on disk but not loaded yet)
+	auto hMod = GetModuleHandleA(szModule);
+	if (!hMod)
+		hMod = LoadLibraryA(szModule);
+
+	if (hMod)
 	{
 #ifdef _DEBUG
 #define DEBUG_SIG
@@ -139,7 +146,10 @@ PVOID Memory::FindInterface(const char *szModule, const char *szObject)
 
 	return nullptr;*/
 
-	const auto hModule = GetModuleHandleA(szModule);
+	// Try GetModuleHandle first (DLL already loaded), then LoadLibrary (DLL on disk but not loaded yet)
+	auto hModule = GetModuleHandleA(szModule);
+	if (!hModule)
+		hModule = LoadLibraryA(szModule);
 	if (!hModule) { return nullptr; }
 
 	const auto createFn = reinterpret_cast<CreateInterfaceFn>(GetProcAddress(hModule, "CreateInterface"));

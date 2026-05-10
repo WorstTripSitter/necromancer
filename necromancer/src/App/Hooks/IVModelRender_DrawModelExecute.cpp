@@ -6,6 +6,7 @@
 
 #include "../Features/CFG.h"
 #include "../Features/SpyCamera/SpyCamera.h"
+#include "../Features/Players/Players.h"
 
 MAKE_SIGNATURE(CBaseAnimating_DrawModel, "client.dll", "4C 8B DC 49 89 5B ? 89 54 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 83 EC ? 48 8B 05 ? ? ? ? 48 8D 3D", 0x0);
 MAKE_SIGNATURE(ViewmodelAttachment_DrawModel, "client.dll", "41 8B D5 FF 50 ? 8B 97", 0x6);
@@ -19,6 +20,11 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, Memory::GetVFunc(I::ModelRender, 19), 
 		CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
 		return;
 	}
+
+	// Provide the original DrawModelExecute function pointer to Materials
+	// so it can call it directly for lag record rendering (Amalgam approach)
+	if (!F::Materials->m_fnDrawModelExecute)
+		F::Materials->SetDrawModelExecuteFn(Hook.Original<IVModelRender::DrawModelExecuteFn>());
 
 	if (!F::SpyCamera->IsRendering())
 	{
@@ -48,75 +54,85 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, Memory::GetVFunc(I::ModelRender, 19), 
 
 			const bool clean_ss = CFG::Misc_Clean_Screenshot && I::EngineClient->IsTakingScreenshot();
 
-			if (CFG::Materials_ViewModel_Active && !clean_ss && nClassId == static_cast<int>(ETFClassIds::CTFViewModel))
+			if (!clean_ss && nClassId == static_cast<int>(ETFClassIds::CTFViewModel))
 			{
 				if (const auto pLocal = H::Entities->GetLocal())
 				{
 					if (!pLocal->IsUbered() && !pLocal->deadflag())
 					{
-						auto getMaterial = [&](int nIndex) -> IMaterial* {
-							switch (nIndex)
-							{
-								case 0: return nullptr;
-								case 1: return F::Materials->m_pFlat;
-								case 2: return F::Materials->m_pShaded;
-								case 3: return F::Materials->m_pGlossy;
-								case 4: return F::Materials->m_pGlow;
-								case 5: return F::Materials->m_pPlastic;
-								default: return nullptr;
-							}
-						};
-
-						const auto mat = getMaterial(CFG::Materials_ViewModel_Hands_Material);
-
-						if (mat)
+						// --- Pass 1: Viewmodel material override (if enabled) ---
+						if (CFG::Materials_ViewModel_Active)
 						{
-							I::ModelRender->ForcedMaterialOverride(mat);
-						}
-
-						if (CFG::Materials_ViewModel_Hands_Alpha < 1.0f)
-						{
-							I::RenderView->SetBlend(CFG::Materials_ViewModel_Hands_Alpha);
-						}
-
-						if (mat)
-						{
-							const auto& base = CFG::Color_Hands;
-
-							if (mat != F::Materials->m_pGlow)
-							{
-								I::RenderView->SetColorModulation(base);
-							}
-
-							else
-							{
-								if (F::Materials->m_pGlowEnvmapTint && F::Materials->m_pGlowSelfillumTint)
+							auto getMaterial = [&](int nIndex) -> IMaterial* {
+								switch (nIndex)
 								{
-									const auto& sheen = CFG::Color_Hands_Sheen;
+									case 0: return nullptr;
+									case 1: return F::Materials->m_pFlat;
+									case 2: return F::Materials->m_pShaded;
+									case 3: return F::Materials->m_pGlossy;
+									case 4: return F::Materials->m_pGlow;
+									case 5: return F::Materials->m_pPlastic;
+									default: return nullptr;
+								}
+							};
 
-									I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+							const auto mat = getMaterial(CFG::Materials_ViewModel_Hands_Material);
 
-									F::Materials->m_pGlowSelfillumTint
-									            ->SetVecValue(ColorUtils::ToFloat(base.r), ColorUtils::ToFloat(base.g), ColorUtils::ToFloat(base.b));
+							if (mat)
+							{
+								I::ModelRender->ForcedMaterialOverride(mat);
+							}
 
-									F::Materials->m_pGlowEnvmapTint
-									            ->SetVecValue(ColorUtils::ToFloat(sheen.r), ColorUtils::ToFloat(sheen.g), ColorUtils::ToFloat(sheen.b));
+							if (CFG::Materials_ViewModel_Hands_Alpha < 1.0f)
+							{
+								I::RenderView->SetBlend(CFG::Materials_ViewModel_Hands_Alpha);
+							}
+
+							if (mat)
+							{
+								const auto& base = CFG::Color_Hands;
+
+								if (mat != F::Materials->m_pGlow)
+								{
+									I::RenderView->SetColorModulation(base);
+								}
+
+								else
+								{
+									if (F::Materials->m_pGlowEnvmapTint && F::Materials->m_pGlowSelfillumTint)
+									{
+										const auto& sheen = CFG::Color_Hands_Sheen;
+
+										I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+
+										F::Materials->m_pGlowSelfillumTint
+										            ->SetVecValue(ColorUtils::ToFloat(base.r), ColorUtils::ToFloat(base.g), ColorUtils::ToFloat(base.b));
+
+										F::Materials->m_pGlowEnvmapTint
+										            ->SetVecValue(ColorUtils::ToFloat(sheen.r), ColorUtils::ToFloat(sheen.g), ColorUtils::ToFloat(sheen.b));
+									}
 								}
 							}
+
+							CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
+
+							I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+
+							if (CFG::Materials_ViewModel_Hands_Alpha < 1.0f)
+							{
+								I::RenderView->SetBlend(1.0f);
+							}
+
+							if (mat)
+							{
+								I::ModelRender->ForcedMaterialOverride(nullptr);
+							}
 						}
 
-						CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
-
-						I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
-
-						if (CFG::Materials_ViewModel_Hands_Alpha < 1.0f)
+						// If pass 1 didn't handle the draw, draw normally
+						if (!CFG::Materials_ViewModel_Active)
 						{
-							I::RenderView->SetBlend(1.0f);
-						}
-
-						if (mat)
-						{
-							I::ModelRender->ForcedMaterialOverride(nullptr);
+							CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
 						}
 
 						return;
@@ -171,6 +187,126 @@ MAKE_HOOK(IVModelRender_DrawModelExecute, Memory::GetVFunc(I::ModelRender, 19), 
 	if (CFG::Visuals_Simple_Models)
 		*const_cast<int*>(&state.m_lod) = 5;
 
+	// Provide the original DrawModelExecute function pointer to Outlines
+	if (!F::Outlines->m_fnDrawModelExecute && F::Materials->m_fnDrawModelExecute)
+		F::Outlines->SetDrawModelExecuteFn(F::Materials->m_fnDrawModelExecute);
+
+	// Amalgam-style lag record rendering:
+	// When Materials is rendering an enemy player, after the real model is drawn,
+	// render lag records by calling DrawModelExecute directly with each record's BoneMatrix.
+	// This avoids DrawModel's internal SetupBones recalculation that causes tearing.
+	if (F::Materials->IsRendering() && pInfo.entity_index > 0)
+	{
+		const auto pRenderedEntity = I::ClientEntityList->GetClientEntity(pInfo.entity_index);
+		if (pRenderedEntity)
+		{
+			auto pNet = pRenderedEntity->GetClientNetworkable();
+			if (pNet && pNet->GetClientClass() && pNet->GetClientClass()->m_ClassID == static_cast<int>(ETFClassIds::CTFPlayer))
+			{
+				// Draw the real model first
+				CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
+
+				// Now render lag records for this player
+				const auto pPlayer = pRenderedEntity->As<C_TFPlayer>();
+				if (pPlayer && F::Materials->ShouldRenderLagRecords(pPlayer))
+				{
+					F::Materials->RenderLagRecords(pPlayer, state, pInfo);
+				}
+				return;
+			}
+		}
+	}
+
+	// When Outlines is rendering an enemy player, capture the state for the glow pass
+	// lag record rendering (Outlines renders in two phases: model draw then glow pass)
+	if (F::Outlines->IsRendering() && pInfo.entity_index > 0)
+	{
+		const auto pRenderedEntity = I::ClientEntityList->GetClientEntity(pInfo.entity_index);
+		if (pRenderedEntity)
+		{
+			auto pNet = pRenderedEntity->GetClientNetworkable();
+			if (pNet && pNet->GetClientClass() && pNet->GetClientClass()->m_ClassID == static_cast<int>(ETFClassIds::CTFPlayer))
+			{
+				const auto pPlayer = pRenderedEntity->As<C_TFPlayer>();
+				if (pPlayer && F::Outlines->ShouldRenderLagRecords(pPlayer))
+				{
+					F::Outlines->CaptureRenderState(state, pInfo);
+				}
+			}
+		}
+	}
+
+	// Sheen overlay for Friend/Teammates/Enemy — applied to their weapon entities
+	if (CFG::Visuals_Sheen_Active
+		&& (CFG::Visuals_Sheen_Friend || CFG::Visuals_Sheen_Teammates || CFG::Visuals_Sheen_Enemy)
+		&& !(CFG::Misc_Clean_Screenshot && I::EngineClient->IsTakingScreenshot())
+		&& F::Materials->m_pSheen
+		&& pInfo.entity_index > 0
+		&& pInfo.entity_index <= I::ClientEntityList->GetMaxEntities())
+	{
+		const auto pClientEntity = I::ClientEntityList->GetClientEntity(pInfo.entity_index);
+		if (pClientEntity)
+		{
+			auto pNetworkable = pClientEntity->GetClientNetworkable();
+			if (pNetworkable)
+			{
+				auto pClientClass = pNetworkable->GetClientClass();
+				if (pClientClass)
+				{
+					const int nClassId = pClientClass->m_ClassID;
+					// Only apply to weapon/wearable entities
+					if (nClassId == static_cast<int>(ETFClassIds::CTFWeaponBase)
+						|| nClassId == static_cast<int>(ETFClassIds::CTFWearable))
+					{
+						auto pWeapon = pClientEntity->As<C_BaseEntity>();
+						auto pOwner = pWeapon->m_hOwnerEntity().Get();
+						if (pOwner)
+						{
+							auto pLocal = H::Entities->GetLocal();
+							if (pLocal && pOwner != pLocal)
+							{
+								auto pOwnerPlayer = pOwner->As<C_TFPlayer>();
+								const bool bIsFriend = pOwnerPlayer ? pOwnerPlayer->IsPlayerOnSteamFriendsList() : false;
+								bool bIsIgnored = false;
+								{
+									PlayerPriority info{};
+									if (F::Players->GetInfo(pOwner->entindex(), info))
+										bIsIgnored = info.Ignored;
+								}
+
+								const bool bIsSameTeam = pOwner->m_iTeamNum() == pLocal->m_iTeamNum();
+								bool bShouldApply = false;
+
+								if ((bIsFriend || bIsIgnored) && CFG::Visuals_Sheen_Friend)
+									bShouldApply = true;
+								if (!bIsFriend && !bIsIgnored && bIsSameTeam && CFG::Visuals_Sheen_Teammates)
+									bShouldApply = true;
+								if (!bIsFriend && !bIsIgnored && !bIsSameTeam && CFG::Visuals_Sheen_Enemy)
+									bShouldApply = true;
+
+								if (bShouldApply)
+								{
+									// Draw weapon normally first
+									CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
+
+									// Then draw additive sheen overlay
+									if (F::Materials->m_pSheenIndex)
+										F::Materials->m_pSheenIndex->SetIntValue(CFG::Visuals_Sheen_Index);
+
+									I::ModelRender->ForcedMaterialOverride(F::Materials->m_pSheen);
+									I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+									CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
+									I::ModelRender->ForcedMaterialOverride(nullptr);
+									return;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	CALL_ORIGINAL(ecx, state, pInfo, pCustomBoneToWorld);
 }
 
@@ -188,6 +324,7 @@ MAKE_HOOK(CBaseAnimating_DrawModel, Signatures::CBaseAnimating_DrawModel.Get(), 
 		{
 			if (!pLocal->IsUbered() && !pLocal->deadflag())
 			{
+				// --- Weapon material override ---
 				auto getMaterial = [&](int nIndex) -> IMaterial* {
 					switch (nIndex)
 					{
@@ -253,7 +390,49 @@ MAKE_HOOK(CBaseAnimating_DrawModel, Signatures::CBaseAnimating_DrawModel.Get(), 
 					I::ModelRender->ForcedMaterialOverride(nullptr);
 				}
 
+				// --- Killstreak sheen additive overlay (local player weapon only) ---
+				if (CFG::Visuals_Sheen_Active && CFG::Visuals_Sheen_Local && F::Materials->m_pSheen)
+				{
+					// OnBind hook handles tint, intensity, and animation.
+					// Just set the sheen index and draw the overlay pass.
+					if (F::Materials->m_pSheenIndex)
+						F::Materials->m_pSheenIndex->SetIntValue(CFG::Visuals_Sheen_Index);
+
+					I::ModelRender->ForcedMaterialOverride(F::Materials->m_pSheen);
+					I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+					CALL_ORIGINAL(ecx, flags);
+					I::ModelRender->ForcedMaterialOverride(nullptr);
+				}
+
 				return result;
+			}
+		}
+	}
+
+	// Sheen overlay when viewmodel material override is OFF (local player weapon only)
+	if (CFG::Visuals_Sheen_Active
+		&& CFG::Visuals_Sheen_Local
+		&& !CFG::Materials_ViewModel_Active
+		&& !clean_ss
+		&& (flags & STUDIO_RENDER)
+		&& reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == Signatures::ViewmodelAttachment_DrawModel.Get())
+	{
+		if (const auto pLocal = H::Entities->GetLocal())
+		{
+			if (!pLocal->IsUbered() && !pLocal->deadflag() && F::Materials->m_pSheen)
+			{
+				// Draw weapon normally first
+				CALL_ORIGINAL(ecx, flags);
+
+				// Then draw additive sheen overlay
+				if (F::Materials->m_pSheenIndex)
+					F::Materials->m_pSheenIndex->SetIntValue(CFG::Visuals_Sheen_Index);
+
+				I::ModelRender->ForcedMaterialOverride(F::Materials->m_pSheen);
+				I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
+				CALL_ORIGINAL(ecx, flags);
+				I::ModelRender->ForcedMaterialOverride(nullptr);
+				return 1;
 			}
 		}
 	}

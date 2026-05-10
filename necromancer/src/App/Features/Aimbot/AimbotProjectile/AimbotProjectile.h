@@ -16,11 +16,34 @@ class CAimbotProjectile
 	{
 		float Speed = 0.0f;
 		float GravityMod = 0.0f;
+		float Gravity = 0.0f;
+		float DragLow = 0.0f;
+		float DragLob = 0.0f;
+		int WeaponID = 0;
+		int ItemDef = 0;
 		bool Pipes = false;
 		bool Flamethrower = false;
+		bool NeedsOffsetCorrection = false;
 	};
 
 	ProjectileInfo_t m_CurProjInfo = {};
+
+	struct ArcCache_t
+	{
+		int WeaponEntity = 0;
+		int WeaponID = 0;
+		int ItemDef = 0;
+		float Speed = 0.0f;
+		float GravityMod = 0.0f;
+		bool Pipes = false;
+		bool Valid = false;
+
+		float Gravity = 0.0f;
+		float DragLow = 0.0f;
+		float DragLob = 0.0f;
+	};
+
+	ArcCache_t m_ArcCache = {};
 
 	// Sticky/Huntsman charge state tracking for pSilent
 	Vec3 m_vChargeAngles = {};      // Angles saved when charge started
@@ -28,9 +51,10 @@ class CAimbotProjectile
 	int m_iCancelWeaponIdx = 0;     // Weapon index to switch back to after cancel
 
 	bool GetProjectileInfo(C_TFWeaponBase* pWeapon);
-	bool CalcProjAngle(const Vec3& vFrom, const Vec3& vTo, Vec3& vAngleOut, float& flTimeOut);
+	void UpdateArcCache(C_TFWeaponBase* pWeapon);
+	bool CalcProjAngle(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, const Vec3& vFrom, const Vec3& vTo, Vec3& vAngleOut, float& flTimeOut, bool bLob = false);
 	void OffsetPlayerPosition(C_TFWeaponBase* pWeapon, Vec3& vPos, C_TFPlayer* pPlayer, bool bDucked, bool bOnGround, const Vec3& vLocalPos);
-	bool CanArcReach(const Vec3& vFrom, const Vec3& vTo, const Vec3& vAngleTo, float flTargetTime, C_BaseEntity* pTarget);
+	bool CanArcReach(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, const Vec3& vFrom, const Vec3& vTo, const Vec3& vAngleTo, float flTargetTime, C_BaseEntity* pTarget);
 	bool CanSee(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, const Vec3& vFrom, const Vec3& vTo, const ProjTarget_t& target, float flTargetTime);
 	bool SolveTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, const CUserCmd* pCmd, ProjTarget_t& target);
 

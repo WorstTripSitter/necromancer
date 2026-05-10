@@ -210,89 +210,9 @@ MAKE_HOOK(INetChannel_SendNetMsg, Signatures::INetChannel_SendNetMsg.Get(), bool
 		}
 	}
 	
-	if (msg.GetType() == clc_Move)
-	{
-		const auto pMsg = reinterpret_cast<CLC_Move*>(&msg);
-
-		const int nLastOutGoingCommand = I::ClientState->lastoutgoingcommand;
-		const int nChokedCommands = I::ClientState->chokedcommands;
-		const int nNextCommandNr = nLastOutGoingCommand + nChokedCommands + 1;
-
-		unsigned char data[4000] = {};
-		pMsg->m_DataOut.StartWriting(data, sizeof(data));
-
-		// Dynamic command priority: use DT setting during doubletap shifts to push attack commands faster
-		// Use normal setting when idle to reduce bandwidth/improve stability
-		// If auto settings enabled, use F::Ticks->GetOptimal* functions
-		int nMaxNewCommands;
-		if (Shifting::bShifting && !Shifting::bShiftingWarp)
-		{
-			// During doubletap
-			nMaxNewCommands = std::min(F::Ticks->GetOptimalDTCommands(), static_cast<int>(MAX_NEW_COMMANDS));
-		}
-		else
-		{
-			// Normal/idle
-			nMaxNewCommands = std::min(F::Ticks->GetOptimalMaxCommands(), MAX_NEW_COMMANDS);
-		}
-		
-		pMsg->m_nNewCommands = 1 + nChokedCommands;
-		pMsg->m_nNewCommands = std::clamp(pMsg->m_nNewCommands, 0, nMaxNewCommands);
-
-		const int nExtraCommands = nChokedCommands + 1 - pMsg->m_nNewCommands;
-		const int nCmdBackup = std::max(2, nExtraCommands);
-
-		pMsg->m_nBackupCommands = std::clamp(nCmdBackup, 0, MAX_BACKUP_COMMANDS);
-
-		const int nNumCmds = pMsg->m_nNewCommands + pMsg->m_nBackupCommands;
-		int nFrom = -1;
-
-		bool bOk = true;
-
-		for (int nTo = nNextCommandNr - nNumCmds + 1; nTo <= nNextCommandNr; nTo++)
-		{
-			bOk = bOk && WriteUsercmdDeltaToBuffer(&pMsg->m_DataOut, nFrom, nTo);
-			nFrom = nTo;
-		}
-
-		if (bOk)
-		{
-			if (nExtraCommands > 0)
-			{
-				pNet->m_nChokedPackets -= nExtraCommands;
-			}
-
-			CALL_ORIGINAL(pNet, reinterpret_cast<INetMessage&>(*pMsg), bForceReliable, bVoice);
-		}
-
-		// ============================================
-		// Deficit Tracking (from Amalgam)
-		// ============================================
-		// Track when we send more commands than the server can process.
-		// The server has sv_maxusrcmdprocessticks (default 24) limit.
-		// If we exceed it, commands get dropped and we need to compensate.
-		if (CFG::Exploits_RapidFire_Deficit_Tracking && !Shifting::bShiftingWarp) // Don't track during warp
-		{
-			// Get sv_maxusrcmdprocessticks
-			static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
-			Shifting::nMaxUsrCmdProcessTicks = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
-			
-			// Calculate how many commands we're allowed to send
-			const int nAllowedNewCommands = std::max(Shifting::nMaxUsrCmdProcessTicks - Shifting::nAvailableTicks, 0);
-			
-			// Calculate how many we actually sent (minus the 3 backup commands that don't count)
-			const int nCmdCount = pMsg->m_nNewCommands + pMsg->m_nBackupCommands - 3;
-			
-			// If we sent more than allowed, track the deficit
-			if (nCmdCount > nAllowedNewCommands)
-			{
-				Shifting::nDeficit = nCmdCount - nAllowedNewCommands;
-			}
-		}
-
-		return true;
-	}
-
+	// clc_Move is now handled by the rebuilt CL_Sendmove in Networking.cpp
+	// No longer need to intercept it here
+	
 	return CALL_ORIGINAL(pNet, msg, bForceReliable, bVoice);
 }
 
@@ -300,7 +220,8 @@ MAKE_HOOK(CNetChannel_SendDatagram, Signatures::CNetChannel_SendDatagram.Get(), 
 	CNetChannel* pNetChan, bf_write* datagram)
 {
 	// Only apply fake latency when datagram is NULL (actual packet send)
-	if (!datagram)
+	// AND when fully in game — AdjustPing corrupts sequence numbers during connection signon
+	if (!datagram && I::EngineClient->IsInGame())
 	{
 		// Apply fake latency before sending
 		F::LagRecords->AdjustPing(pNetChan);

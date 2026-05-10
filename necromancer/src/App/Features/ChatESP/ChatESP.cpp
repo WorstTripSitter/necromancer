@@ -118,6 +118,11 @@ void CChatESP::Draw()
 		if (!pPlayer || !pPlayer->IsAlive() || pPlayer->IsDormant())
 			continue;
 
+		// Skip local player — in third person the position gets cached, then when switching
+		// back to first person the stale position causes the bubble to appear at the wrong place
+		if (pPlayer == pLocal)
+			continue;
+
 		Vec3 vHeadPos = GetPlayerHeadPos(tBubble.m_iPlayerIndex);
 		if (vHeadPos.IsZero())
 			continue;
@@ -289,12 +294,15 @@ Vec3 CChatESP::GetPlayerHeadPos(int iPlayerIndex)
 	if (!pPlayer)
 		return {};
 
-	// Get head position from bones
-	matrix3x4_t aBones[MAXSTUDIOBONES];
-	if (!pPlayer->SetupBones(aBones, MAXSTUDIOBONES, BONE_USED_BY_HITBOX, I::GlobalVars->curtime))
+	// Use cached bone data instead of calling SetupBones (saves ~6KB stack alloc + full bone computation per bubble per frame)
+	const auto pCachedBoneData = pPlayer->GetCachedBoneData();
+	if (!pCachedBoneData || pCachedBoneData->Count() <= 0 || !pCachedBoneData->Base())
 		return pPlayer->GetRenderOrigin() + Vec3(0, 0, 72);
 
-	// Get head bone from model
+	const matrix3x4_t* pBoneMatrix = pCachedBoneData->Base();
+	const int nBoneCount = std::min(pCachedBoneData->Count(), MAXSTUDIOBONES);
+
+	// Get head hitbox directly instead of iterating all hitbox sets
 	const model_t* pModel = pPlayer->GetModel();
 	if (!pModel)
 		return pPlayer->GetRenderOrigin() + Vec3(0, 0, 72);
@@ -303,23 +311,17 @@ Vec3 CChatESP::GetPlayerHeadPos(int iPlayerIndex)
 	if (!pStudioHdr)
 		return pPlayer->GetRenderOrigin() + Vec3(0, 0, 72);
 
-	// Find head hitbox
-	for (int nSet = 0; nSet < pStudioHdr->numhitboxsets; nSet++)
+	auto pSet = pStudioHdr->pHitboxSet(pPlayer->m_nHitboxSet());
+	if (pSet && pSet->numhitboxes > 0)
 	{
-		mstudiohitboxset_t* pSet = pStudioHdr->pHitboxSet(nSet);
-		if (!pSet)
-			continue;
-
-		for (int nBox = 0; nBox < pSet->numhitboxes; nBox++)
+		// Hitbox 0 is always the head in TF2
+		auto pBox = pSet->pHitbox(0);
+		if (pBox && pBox->bone < nBoneCount)
 		{
-			mstudiobbox_t* pBox = pSet->pHitbox(nBox);
-			if (!pBox || pBox->group != 0) // Group 0 is typically head
-				continue;
-
 			Vec3 vHead;
-			vHead.x = aBones[pBox->bone][0][3];
-			vHead.y = aBones[pBox->bone][1][3];
-			vHead.z = aBones[pBox->bone][2][3];
+			vHead.x = pBoneMatrix[pBox->bone][0][3];
+			vHead.y = pBoneMatrix[pBox->bone][1][3];
+			vHead.z = pBoneMatrix[pBox->bone][2][3];
 			return vHead;
 		}
 	}

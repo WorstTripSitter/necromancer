@@ -12,7 +12,6 @@ class CMaterials
 	bool m_bCleaningUp = false;
 
 	void DrawEntity(C_BaseEntity* pEntity);
-	void RunLagRecords();
 	void RunFakeAngle();
 
 public:
@@ -23,11 +22,31 @@ public:
 	IMaterial* m_pPlastic = nullptr;
 	IMaterialVar* m_pGlowEnvmapTint = nullptr;
 	IMaterialVar* m_pGlowSelfillumTint = nullptr;
+
+	IMaterial* m_pSheen = nullptr;
+	IMaterialVar* m_pSheenIndex = nullptr;
+	IMaterialVar* m_pSheenTint = nullptr;
 	IMaterial* m_pFlatNoInvis = nullptr;
 	IMaterial* m_pShadedNoInvis = nullptr;
 
 	void Run();
 	void CleanUp();
+
+	// Called by the DrawModelExecute hook to provide the original function pointer
+	void SetDrawModelExecuteFn(IVModelRender::DrawModelExecuteFn fn) { m_fnDrawModelExecute = fn; }
+
+	// Original DrawModelExecute function pointer — set by the hook, used by RenderLagRecords
+	IVModelRender::DrawModelExecuteFn m_fnDrawModelExecute = nullptr;
+
+	// Check if lag records should be rendered for this player (called from DrawModelExecute hook)
+	bool ShouldRenderLagRecords(C_TFPlayer* pPlayer);
+
+	// Check weapon/record conditions without Materials-specific config — shared with Outlines
+	static bool ShouldRenderLagRecordsBase(C_TFPlayer* pPlayer);
+
+	// Render lag records by calling DrawModelExecute directly with each record's BoneMatrix
+	// (Amalgam approach — no Set/Restore/DrawModel, no SetupBones recalculation)
+	void RenderLagRecords(C_TFPlayer* pPlayer, const DrawModelState_t& state, ModelRenderInfo_t& pInfo);
 
 	bool HasDrawn(C_BaseEntity* pEntity)
 	{
@@ -51,6 +70,7 @@ public:
 			|| pMaterial == m_pGlossy
 			|| pMaterial == m_pGlow
 			|| pMaterial == m_pPlastic
+			|| pMaterial == m_pSheen
 			|| pMaterial == m_pFlatNoInvis
 			|| pMaterial == m_pShadedNoInvis;
 	}

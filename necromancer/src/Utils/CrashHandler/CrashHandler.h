@@ -2,39 +2,31 @@
 
 #include "../Singleton/Singleton.h"
 #include <Windows.h>
-#include <DbgHelp.h>
 #include <string>
-#include <vector>
-#include <sstream>
 
-#pragma comment(lib, "DbgHelp.lib")
-
-struct StackFrame
+// Lightweight crash context — updated each frame so we know what was running when it blew up
+struct CrashContext_t
 {
-    DWORD64 Address;
-    std::string ModuleName;
-    std::string FunctionName;
-    DWORD64 Offset;
+	const char* m_pszLastFeature = "none";       // Which feature was last running
+	const char* m_pszLastHook = "none";          // Which hook was active
+	int m_nTargetIndex = -1;                     // Aimbot target
+	int m_nCommandNumber = 0;                    // Current cmd number
+	bool m_bInGame = false;                      // Engine says we're in game
+	bool m_bLevelTransition = false;             // Level transition in progress
+	char m_szMapName[64] = {};                   // Current map name
 };
 
 class CCrashHandler
 {
 private:
-    static LPTOP_LEVEL_EXCEPTION_FILTER s_PreviousFilter;
+    static PVOID s_pVectoredHandle;
     static bool s_Initialized;
 
-    static LONG WINAPI ExceptionFilter(EXCEPTION_POINTERS* pExceptionInfo);
-    static std::string GetExceptionCodeString(DWORD code);
-    static std::vector<StackFrame> CaptureStackTrace(CONTEXT* context);
-    static std::string GetModuleInfo();
-    static std::string GetSysInfo();
-    static std::string FormatCrashReport(EXCEPTION_POINTERS* pExceptionInfo);
-    static void ShowCrashDialog(const std::string& report);
-    static void WriteCrashLog(const std::string& report);
-
 public:
-    static void Initialize();
-    static void Shutdown();
+    void Initialize();
+    void Shutdown();
+
+    static CrashContext_t s_Context;  // Updated by hooks/features each frame
 };
 
-MAKE_SINGLETON(CCrashHandler, CrashHandler);
+MAKE_SINGLETON_SCOPED(CCrashHandler, CrashHandler, F);

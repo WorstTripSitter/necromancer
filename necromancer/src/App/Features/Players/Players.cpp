@@ -48,7 +48,8 @@ void CPlayers::Parse()
 				playerEntry.value("retardlegit", false),
 				playerEntry.value("targeted", false),
 				playerEntry.value("streamer", false),
-				playerEntry.value("nigger", false)
+				playerEntry.value("nigger", false),
+				playerEntry.value("followplayer", false)
 			};
 		}
 	}
@@ -221,6 +222,49 @@ void CPlayers::ClearCurrentSession()
 	m_CurrentSessionPlayers.clear();
 }
 
+void CPlayers::ClearAllFollowPlayer()
+{
+	// Clear FollowPlayer flag from all players in memory
+	for (auto& [key, info] : m_Players)
+	{
+		info.FollowPlayer = false;
+	}
+
+	// Remove entries that have no tags left, update the rest on disk
+	nlohmann::json j{};
+	std::ifstream readFile(m_LogPath);
+	if (readFile.is_open() && readFile.peek() != std::ifstream::traits_type::eof())
+	{
+		readFile >> j;
+	}
+	readFile.close();
+
+	for (auto it = j.begin(); it != j.end(); )
+	{
+		auto& entry = *it;
+		entry["followplayer"] = false;
+
+		// If no tags remain, remove the entry entirely
+		if (!entry.value("ignored", false) && !entry.value("cheater", false) &&
+			!entry.value("retardlegit", false) && !entry.value("targeted", false) &&
+			!entry.value("streamer", false) && !entry.value("nigger", false))
+		{
+			it = j.erase(it);
+		}
+		else
+		{
+			++it;
+		}
+	}
+
+	std::ofstream outFile(m_LogPath);
+	if (outFile.is_open())
+	{
+		outFile << std::setw(4) << j;
+		outFile.close();
+	}
+}
+
 void CPlayers::Mark(int entindex, const PlayerPriority& info)
 {
 	if (entindex == I::EngineClient->GetLocalPlayer())
@@ -261,8 +305,9 @@ void CPlayers::Mark(int entindex, const PlayerPriority& info)
 	playerEntry["targeted"] = info.Targeted;
 	playerEntry["streamer"] = info.Streamer;
 	playerEntry["nigger"] = info.Nigger;
+	playerEntry["followplayer"] = info.FollowPlayer;
 
-	if (!info.Ignored && !info.Cheater && !info.RetardLegit && !info.Targeted && !info.Streamer && !info.Nigger)
+	if (!info.Ignored && !info.Cheater && !info.RetardLegit && !info.Targeted && !info.Streamer && !info.Nigger && !info.FollowPlayer)
 	{
 		j.erase(std::string(playerInfo.guid));
 	}

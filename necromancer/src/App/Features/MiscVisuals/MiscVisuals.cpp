@@ -2,6 +2,7 @@
 
 #include "../CFG.h"
 #include "../RapidFire/RapidFire.h"
+#include "../TickbaseManip/TickbaseManip.h"
 #include "../Crits/Crits.h"
 #include "../Menu/Menu.h"
 #include "../FakeLag/FakeLag.h"
@@ -372,152 +373,284 @@ void CMiscVisuals::ShiftBar()
 		return;
 
 	if (CFG::Misc_Clean_Screenshot && I::EngineClient->IsTakingScreenshot())
-	{
 		return;
-	}
 
 	if (I::EngineVGui->IsGameUIVisible() || SDKUtils::BInEndOfMatch())
 		return;
 
 	const auto pLocal = H::Entities->GetLocal();
-
 	if (!pLocal || pLocal->deadflag())
 		return;
 
 	const auto pWeapon = H::Entities->GetWeapon();
-
 	if (!pWeapon)
 		return;
 
-	static int nBarW = 80;
-	static int nBarH = 4;
+	// Handle dragging when menu is open
+	if (F::Menu->IsOpen())
+		ShiftBarDrag();
 
-	const int nBarX = (H::Draw->GetScreenW() / 2) - (nBarW / 2);
-	const int nBarY = (H::Draw->GetScreenH() / 2) + 100;
-	const int circleX = H::Draw->GetScreenW() / 2;
+	int x = CFG::Exploits_Shifting_Indicator_Pos_X;
+	int y = CFG::Exploits_Shifting_Indicator_Pos_Y;
 
-	// Check if DT is possible (uses GetTicks which checks clip >= 2, ticks >= 24, etc.)
-	bool bCanDT = F::RapidFire->GetTicks(pWeapon) > 0;
-	
-	// Alpha: 255 when DT ready, 100 when not ready
-	byte nAlpha = bCanDT ? 255 : 100;
+	// Layout dimensions
+	const int nWidth = CFG::Exploits_Shifting_Indicator_Width;
+	const int nBarHeight = CFG::Exploits_Shifting_Indicator_Height;
+	const int nPadding = 6;
+	const int nRowHeight = 12;
+	const auto& font = H::Fonts->Get(EFonts::ESP_SMALL);
 
-	if (CFG::Exploits_Shifting_Indicator_Style == 0)
+	// Colors
+	const Color_t clrOutline = {60, 60, 60, 255};
+	const Color_t clrBarBg = {40, 40, 40, 180};
+	const Color_t clrText = {220, 220, 220, 255};
+	const Color_t clrTextGreen = {80, 255, 120, 255};
+	const Color_t clrTextRed = {255, 80, 80, 255};
+	const Color_t clrTextYellow = {255, 180, 60, 255};
+
+	// Get accent secondary color (with RGB support)
+	Color_t clrAccent = CFG::Menu_Accent_Secondary;
+	if (CFG::Menu_Accent_Secondary_RGB)
 	{
-		H::Draw->Rect(nBarX - 1, nBarY - 1, nBarW + 2, nBarH + 2, CFG::Menu_Background);
+		const float rate = CFG::Menu_Accent_Secondary_RGB_Rate;
+		clrAccent.r = static_cast<byte>(std::lround(std::cosf(I::GlobalVars->realtime * rate + 0.0f) * 127.5f + 127.5f));
+		clrAccent.g = static_cast<byte>(std::lround(std::cosf(I::GlobalVars->realtime * rate + 2.0f) * 127.5f + 127.5f));
+		clrAccent.b = static_cast<byte>(std::lround(std::cosf(I::GlobalVars->realtime * rate + 4.0f) * 127.5f + 127.5f));
+	}
 
-		// Calculate max ticks budget (shared between DT and fakelag)
-		static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
-		int nMaxTicksBudget = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
-		if (CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_IgnoreTickLimit)
-			nMaxTicksBudget = std::min(nMaxTicksBudget, 8);
-		
-		// Get current usage
-		int nSavedDTTicks = Shifting::nAvailableTicks;
-		int nChokedCommands = I::ClientState->chokedcommands;
-		int nTotalUsed = nSavedDTTicks + nChokedCommands;
-		
-		if (nTotalUsed > 0)
+	// Calculate max ticks budget
+	static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
+	int nMaxTicksBudget = sv_maxusrcmdprocessticks ? sv_maxusrcmdprocessticks->GetInt() : 24;
+	if (CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_IgnoreTickLimit)
+		nMaxTicksBudget = std::min(nMaxTicksBudget, 8);
+
+	int nSavedDTTicks = Shifting::nAvailableTicks;
+	int nChokedCommands = I::ClientState->chokedcommands;
+
+	bool bCanDT = F::RapidFire->GetTicks(pWeapon) > 0;
+	bool bShifting = Shifting::bShifting || Shifting::bShiftingWarp;
+	bool bRecharging = Shifting::bRecharging;
+
+	int nLeftX = x + nPadding;
+	int nBarEndX = x + nWidth - nPadding;
+	int nTextRightX = nBarEndX - 20;
+	int nDrawY = y;
+
+	// === ROW 1: Progress bar ===
+	int nBarX = nLeftX;
+	int nBarY = nDrawY;
+	int nActualBarWidth = nWidth - nPadding * 2;
+
+	// Bar background + outline
+	H::Draw->Rect(nBarX, nBarY, nActualBarWidth, nBarHeight, clrBarBg);
+	H::Draw->OutlinedRect(nBarX, nBarY, nActualBarWidth, nBarHeight, clrOutline);
+
+	// Calculate fill ratios (no interpolation - instant)
+	float flDTRatio = static_cast<float>(nSavedDTTicks) / static_cast<float>(nMaxTicksBudget);
+	float flChokeRatio = static_cast<float>(nChokedCommands) / static_cast<float>(nMaxTicksBudget);
+
+	int nInnerWidth = nActualBarWidth - 2;
+	int nFillX = nBarX + 1;
+	int nFillY = nBarY + 1;
+	int nFillHeight = nBarHeight - 2;
+
+	// Draw DT fill with 3D gradient (same style as crit bar)
+	int nFillWidth = static_cast<int>(flDTRatio * nInnerWidth);
+	if (nFillWidth > 0)
+	{
+		for (int row = 0; row < nFillHeight; row++)
 		{
-			// Calculate fill widths based on the actual max budget
-			const int nDTFillWidth = static_cast<int>(Math::RemapValClamped(
-				static_cast<float>(nSavedDTTicks),
-				0.0f, static_cast<float>(nMaxTicksBudget),
-				0.0f, static_cast<float>(nBarW)
-			));
-			
-			const int nChokeFillWidth = static_cast<int>(Math::RemapValClamped(
-				static_cast<float>(nChokedCommands),
-				0.0f, static_cast<float>(nMaxTicksBudget),
-				0.0f, static_cast<float>(nBarW)
-			));
+			float flVertRatio = static_cast<float>(row) / static_cast<float>(std::max(nFillHeight - 1, 1));
 
-			// Use RGB with bloom if enabled
-			if (CFG::Menu_Accent_Secondary_RGB)
+			float flBrightness;
+			if (flVertRatio < 0.3f)
+				flBrightness = 1.4f - (flVertRatio / 0.3f) * 0.4f;
+			else if (flVertRatio < 0.7f)
+				flBrightness = 1.0f;
+			else
+				flBrightness = 1.0f - ((flVertRatio - 0.7f) / 0.3f) * 0.35f;
+
+			Color_t clrLeft = {
+				static_cast<byte>(std::clamp(static_cast<int>(clrAccent.r * flBrightness * 0.9f), 0, 255)),
+				static_cast<byte>(std::clamp(static_cast<int>(clrAccent.g * flBrightness * 0.9f), 0, 255)),
+				static_cast<byte>(std::clamp(static_cast<int>(clrAccent.b * flBrightness * 0.9f), 0, 255)),
+				255
+			};
+
+			Color_t clrRight = {
+				static_cast<byte>(std::clamp(static_cast<int>(clrAccent.r * flBrightness), 0, 255)),
+				static_cast<byte>(std::clamp(static_cast<int>(clrAccent.g * flBrightness), 0, 255)),
+				static_cast<byte>(std::clamp(static_cast<int>(clrAccent.b * flBrightness), 0, 255)),
+				255
+			};
+
+			H::Draw->GradientRect(nFillX, nFillY + row, nFillWidth, 1, clrLeft, clrRight, true);
+		}
+	}
+
+	// Draw DT tick indicator (transparent overlay showing DT cost)
+	{
+		const int nDTNeededTicks = F::Ticks->GetOptimalDTTicks();
+		float flDTCostRatio = static_cast<float>(nDTNeededTicks) / static_cast<float>(nMaxTicksBudget);
+		int nDTIndicatorWidth = static_cast<int>(flDTCostRatio * nInnerWidth);
+
+		// Clamp to bar bounds
+		nDTIndicatorWidth = std::min(nDTIndicatorWidth, nInnerWidth);
+
+		if (nDTIndicatorWidth > 0)
+		{
+			// Gradient fill based on DT readiness
+			Color_t clrDTLeft, clrDTRight, clrDTOutline;
+			if (bRecharging)
 			{
-				const float rate = CFG::Menu_Accent_Secondary_RGB_Rate;
-				
-				// Draw DT ticks (rainbow) - with alpha based on DT ready state
-				for (int i = 0; i < nDTFillWidth; i++)
-				{
-					Color_t color = GetRainbowColor(i, rate);
-					color.a = nAlpha;
-					const Color_t colorDim = {color.r, color.g, color.b, static_cast<byte>((25 + (230 * i / nBarW)) * nAlpha / 255)};
-					H::Draw->Line(nBarX + i, nBarY, nBarX + i, nBarY + nBarH - 1, colorDim);
-				}
-				// Outline with rainbow
-				for (int i = 0; i < nDTFillWidth; i++)
-				{
-					Color_t color = GetRainbowColor(i, rate);
-					color.a = nAlpha;
-					H::Draw->Line(nBarX + i, nBarY, nBarX + i, nBarY, color);
-					H::Draw->Line(nBarX + i, nBarY + nBarH - 1, nBarX + i, nBarY + nBarH - 1, color);
-				}
-				
-				// Draw choked ticks using FakeLag color from config
-				if (nChokedCommands > 0)
-				{
-					const Color_t chokeColor = CFG::Color_FakeLag;
-					const Color_t chokeColorDim = {chokeColor.r, chokeColor.g, chokeColor.b, 100};
-					int nActualChokeWidth = std::min(nChokeFillWidth, nBarW - nDTFillWidth);
-					for (int i = 0; i < nActualChokeWidth; i++)
-					{
-						H::Draw->Line(nBarX + nDTFillWidth + i, nBarY, nBarX + nDTFillWidth + i, nBarY + nBarH - 1, chokeColorDim);
-					}
-					if (nActualChokeWidth > 0)
-						H::Draw->OutlinedRect(nBarX + nDTFillWidth, nBarY, nActualChokeWidth, nBarH, chokeColor);
-				}
-				
-				// Left and right edges for DT portion
-				if (nDTFillWidth > 0)
-				{
-					Color_t leftColor = GetRainbowColor(0, rate);
-					Color_t rightColor = GetRainbowColor(nDTFillWidth, rate);
-					leftColor.a = nAlpha;
-					rightColor.a = nAlpha;
-					H::Draw->Line(nBarX, nBarY, nBarX, nBarY + nBarH - 1, leftColor);
-					H::Draw->Line(nBarX + nDTFillWidth - 1, nBarY, nBarX + nDTFillWidth - 1, nBarY + nBarH - 1, rightColor);
-				}
+				// Yellow/amber - recharging
+				clrDTLeft = {255, 200, 60, 70};
+				clrDTRight = {255, 160, 30, 100};
+				clrDTOutline = {255, 200, 60, 200};
+			}
+			else if (bCanDT)
+			{
+				// Bright green - ready
+				clrDTLeft = {40, 255, 100, 70};
+				clrDTRight = {20, 220, 80, 100};
+				clrDTOutline = {60, 255, 120, 220};
 			}
 			else
 			{
-				Color_t color = F::VisualUtils->GetAccentSecondary();
-				color.a = nAlpha;
-				const Color_t colorDim = {color.r, color.g, color.b, static_cast<byte>(25 * nAlpha / 255)};
-				
-				// Draw DT ticks
-				if (nDTFillWidth > 0)
+				// Red - not enough ticks
+				clrDTLeft = {255, 60, 60, 70};
+				clrDTRight = {200, 30, 30, 100};
+				clrDTOutline = {255, 80, 80, 200};
+			}
+
+			// Draw gradient overlay
+			H::Draw->GradientRect(nFillX, nFillY, nDTIndicatorWidth, nFillHeight, clrDTLeft, clrDTRight, true);
+
+			// Full outline around the indicator
+			H::Draw->OutlinedRect(nFillX, nFillY, nDTIndicatorWidth, nFillHeight, clrDTOutline);
+
+			// Diagonal hatch lines for extra visual distinction when recharging
+			if (bRecharging && nDTIndicatorWidth > 4)
+			{
+				Color_t clrHatch = {255, 200, 60, 50};
+				for (int hx = -nFillHeight; hx < nDTIndicatorWidth; hx += 6)
 				{
-					H::Draw->GradientRect(nBarX, nBarY, nDTFillWidth, nBarH, colorDim, color, false);
-					H::Draw->OutlinedRect(nBarX, nBarY, nDTFillWidth, nBarH, color);
-				}
-				
-				// Draw choked ticks using FakeLag color from config
-				if (nChokedCommands > 0)
-				{
-					const Color_t chokeColor = CFG::Color_FakeLag;
-					const Color_t chokeColorDim = {chokeColor.r, chokeColor.g, chokeColor.b, 50};
-					int nChokeStartX = nBarX + nDTFillWidth;
-					int nActualChokeWidth = std::min(nChokeFillWidth, nBarW - nDTFillWidth);
-					if (nActualChokeWidth > 0)
-					{
-						H::Draw->GradientRect(nChokeStartX, nBarY, nActualChokeWidth, nBarH, chokeColorDim, chokeColor, false);
-						H::Draw->OutlinedRect(nChokeStartX, nBarY, nActualChokeWidth, nBarH, chokeColor);
-					}
+					int x1 = nFillX + std::max(hx, 0);
+					int y1 = nFillY + std::max(-hx, 0);
+					int x2 = nFillX + std::min(hx + nFillHeight, nDTIndicatorWidth);
+					int y2 = nFillY + std::min(nFillHeight, nFillHeight + hx);
+					if (x1 < x2 && y1 < y2)
+						H::Draw->Line(x1, y1, x2, y2, clrHatch);
 				}
 			}
 		}
 	}
 
-	if (CFG::Exploits_Shifting_Indicator_Style == 1)
+	// Draw choked ticks as a secondary color overlay
+	int nChokeWidth = static_cast<int>(flChokeRatio * nInnerWidth);
+	if (nChokeWidth > 0)
 	{
-		const float end{Math::RemapValClamped(static_cast<float>(Shifting::nAvailableTicks), 0.0f, MAX_COMMANDS, -90.0f, 359.0f)};
+		const Color_t chokeColor = CFG::Color_FakeLag;
+		int nChokeStartX = nFillX + nFillWidth;
+		int nActualChokeWidth = std::min(nChokeWidth, nInnerWidth - nFillWidth);
 
-		H::Draw->Arc(circleX, nBarY, 21, 6.0f, -90.0f, 359.0f, CFG::Menu_Background);
-		
-		Color_t arcColor = F::VisualUtils->GetAccentSecondary();
-		arcColor.a = nAlpha;
-		H::Draw->Arc(circleX, nBarY, 20, 4.0f, -90.0f, end, arcColor);
+		if (nActualChokeWidth > 0)
+		{
+			for (int row = 0; row < nFillHeight; row++)
+			{
+				float flVertRatio = static_cast<float>(row) / static_cast<float>(std::max(nFillHeight - 1, 1));
+
+				float flBrightness;
+				if (flVertRatio < 0.3f)
+					flBrightness = 1.4f - (flVertRatio / 0.3f) * 0.4f;
+				else if (flVertRatio < 0.7f)
+					flBrightness = 1.0f;
+				else
+					flBrightness = 1.0f - ((flVertRatio - 0.7f) / 0.3f) * 0.35f;
+
+				Color_t clrLeft = {
+					static_cast<byte>(std::clamp(static_cast<int>(chokeColor.r * flBrightness * 0.9f), 0, 255)),
+					static_cast<byte>(std::clamp(static_cast<int>(chokeColor.g * flBrightness * 0.9f), 0, 255)),
+					static_cast<byte>(std::clamp(static_cast<int>(chokeColor.b * flBrightness * 0.9f), 0, 255)),
+					200
+				};
+
+				Color_t clrRight = {
+					static_cast<byte>(std::clamp(static_cast<int>(chokeColor.r * flBrightness), 0, 255)),
+					static_cast<byte>(std::clamp(static_cast<int>(chokeColor.g * flBrightness), 0, 255)),
+					static_cast<byte>(std::clamp(static_cast<int>(chokeColor.b * flBrightness), 0, 255)),
+					200
+				};
+
+				H::Draw->GradientRect(nChokeStartX, nFillY + row, nActualChokeWidth, 1, clrLeft, clrRight, true);
+			}
+
+			// Outline the choke portion
+			H::Draw->OutlinedRect(nChokeStartX, nBarY, nActualChokeWidth, nBarHeight, chokeColor);
+		}
+	}
+
+	nDrawY += nBarHeight + 2;
+
+	// === ROW 2: TICKS label (left) and STATUS (right) ===
+	// Left: TICKS: X/MAX
+	H::Draw->String(font, nLeftX, nDrawY, clrText, POS_DEFAULT,
+		std::format("TICKS: {}/{}", nSavedDTTicks, nMaxTicksBudget).c_str());
+
+	// Right: Status
+	if (bShifting)
+		H::Draw->String(font, nTextRightX, nDrawY, clrTextYellow, POS_CENTERX, "SHIFTING");
+	else if (bRecharging)
+		H::Draw->String(font, nTextRightX, nDrawY, clrTextYellow, POS_CENTERX, "RECHARGE");
+	else if (bCanDT)
+		H::Draw->String(font, nTextRightX, nDrawY, clrTextGreen, POS_CENTERX, "READY");
+	else
+		H::Draw->String(font, nTextRightX, nDrawY, clrTextRed, POS_CENTERX, "WAIT");
+
+	nDrawY += nRowHeight;
+
+	// === ROW 3: Choked info (right-aligned) ===
+	if (nChokedCommands > 0)
+	{
+		H::Draw->String(font, nTextRightX, nDrawY, {200, 150, 255, 255}, POS_CENTERX,
+			std::format("CHOKE: {}", nChokedCommands).c_str());
+	}
+}
+
+void CMiscVisuals::ShiftBarDrag()
+{
+	const int nMouseX = H::Input->GetMouseX();
+	const int nMouseY = H::Input->GetMouseY();
+
+	static bool bDragging = false;
+	static int nDeltaX = 0;
+	static int nDeltaY = 0;
+
+	if (!bDragging && F::Menu->IsMenuWindowHovered())
+		return;
+
+	const int x = CFG::Exploits_Shifting_Indicator_Pos_X;
+	const int y = CFG::Exploits_Shifting_Indicator_Pos_Y;
+
+	// Hitbox matches the indicator size
+	const int nWidth = CFG::Exploits_Shifting_Indicator_Width;
+	const int nHeight = CFG::Exploits_Shifting_Indicator_Height + 40; // Bar height + text rows
+	const bool bHovered = nMouseX >= x && nMouseX <= x + nWidth && nMouseY >= y && nMouseY <= y + nHeight;
+
+	if (bHovered && H::Input->IsPressed(VK_LBUTTON))
+	{
+		nDeltaX = nMouseX - x;
+		nDeltaY = nMouseY - y;
+		bDragging = true;
+	}
+
+	if (!H::Input->IsPressed(VK_LBUTTON) && !H::Input->IsHeld(VK_LBUTTON))
+		bDragging = false;
+
+	if (bDragging)
+	{
+		CFG::Exploits_Shifting_Indicator_Pos_X = nMouseX - nDeltaX;
+		CFG::Exploits_Shifting_Indicator_Pos_Y = nMouseY - nDeltaY;
 	}
 }
 
@@ -727,15 +860,18 @@ void CMiscVisuals::Freecam(CViewSetup* pSetup)
 			
 			if (m_bFreecamActive)
 			{
-				// Save player angles and initialize freecam position when enabling
+				// Save player angles, thirdperson state, and initialize freecam position when enabling
 				m_vSavedPlayerAngles = I::EngineClient->GetViewAngles();
+				m_bWasThirdpersonBeforeFreecam = CFG::Visuals_Thirdperson_Active;
+				CFG::Visuals_Thirdperson_Active = true;  // Force thirdperson so camera detaches from player
 				m_vFreecamPos = pSetup->origin;
 				m_vFreecamAngles = pSetup->angles;
 			}
 			else
 			{
-				// Restore saved player angles when disabling
+				// Restore saved player angles and thirdperson state when disabling
 				I::EngineClient->SetViewAngles(m_vSavedPlayerAngles);
+				CFG::Visuals_Thirdperson_Active = m_bWasThirdpersonBeforeFreecam;
 			}
 		}
 	}

@@ -146,19 +146,37 @@ void CAutoBackstab::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 		return;
 	}
 
-	for (const auto pEntity : H::Entities->GetGroup(EEntGroup::PLAYERS_ENEMIES))
+	// Iterate entity list directly for safety (cached group pointers may be stale after class change)
+	// This prevents crashes when entities are destroyed and recreated during class switches
+	const int nMaxClients = I::EngineClient->GetMaxClients();
+	
+	for (int n = 1; n <= nMaxClients; n++)
 	{
-		if (!pEntity)
+		auto pClientEntity = I::ClientEntityList->GetClientEntity(n);
+		if (!pClientEntity || pClientEntity->IsDormant())
+			continue;
+
+		// Validate it's a player before casting
+		auto pNetworkable = pClientEntity->GetClientNetworkable();
+		if (!pNetworkable || !pNetworkable->GetClientClass())
+			continue;
+
+		if (pNetworkable->GetClientClass()->m_ClassID != static_cast<int>(ETFClassIds::CTFPlayer))
+			continue;
+
+		const auto pPlayer = pClientEntity->As<C_TFPlayer>();
+		if (!pPlayer)
+			continue;
+
+		// Skip invalid or dead players
+		if (!H::Entities->IsEntityValid(pPlayer) || pPlayer->deadflag() || pPlayer->InCond(TF_COND_HALLOWEEN_GHOST_MODE))
 		{
 			continue;
 		}
 
-		const auto pPlayer = pEntity->As<C_TFPlayer>();
-
-		if (!pPlayer || pPlayer->deadflag() || pPlayer->InCond(TF_COND_HALLOWEEN_GHOST_MODE))
-		{
+		// Skip teammates (can't backstab your own team)
+		if (pPlayer->m_iTeamNum() == pLocal->m_iTeamNum())
 			continue;
-		}
 
 		if (CFG::Triggerbot_AutoBackstab_Ignore_Friends && pPlayer->IsPlayerOnSteamFriendsList())
 		{
@@ -196,6 +214,7 @@ void CAutoBackstab::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 		}
 
 		// Skip current model position when fake latency is active
+		// With fake latency, the server backtracks the target — we should only aim at backtrack records
 		const bool bFakeLatencyActive = F::LagRecords->GetFakeLatency() > 0.0f;
 		const float flSafetyMargin = GetBackstabSafetyMargin();
 		
@@ -243,9 +262,9 @@ void CAutoBackstab::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 		const int nStartRecord = bFakeLatencyActive ? std::max(1, numRecords - 5) : 1;
 		const int nEndRecord = numRecords;
 
-		for (int n = nStartRecord; n < nEndRecord; n++)
+		for (int r = nStartRecord; r < nEndRecord; r++)
 		{
-			const auto record = F::LagRecords->GetRecord(pPlayer, n, true);
+			const auto record = F::LagRecords->GetRecord(pPlayer, r, true);
 
 			if (!record)
 			{

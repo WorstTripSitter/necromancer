@@ -7,8 +7,10 @@ MAKE_SIGNATURE(CBaseEntity_AddVar, "client.dll", "48 89 5C 24 ? 48 89 6C 24 ? 57
 MAKE_HOOK(CBaseEntity_AddVar, Signatures::CBaseEntity_AddVar.Get(), void, __fastcall,
 	C_BaseEntity* ecx, void* data, IInterpolatedVar* watcher, int type, bool bSetup)
 {
-	// Safety check - skip if entity is invalid or during level transitions
-	if (!ecx || G::bLevelTransition)
+	// Safety check - skip if entity is invalid, during level transitions, or not fully in game yet
+	// During "Parsing game info" the client is connected but not in-game — blocking interp vars
+	// here corrupts entity setup and causes connection hangs
+	if (!ecx || G::bLevelTransition || !I::EngineClient->IsInGame())
 	{
 		CALL_ORIGINAL(ecx, data, watcher, type, bSetup);
 		return;
@@ -46,8 +48,8 @@ MAKE_HOOK(CBaseEntity_AddVar, Signatures::CBaseEntity_AddVar.Get(), void, __fast
 MAKE_HOOK(CBaseEntity_EstimateAbsVelocity, Signatures::CBaseEntity_EstimateAbsVelocity.Get(), void, __fastcall,
 	C_BaseEntity* ecx, Vector& vel)
 {
-	// Safety check - skip if entity is invalid or during level transitions
-	if (!ecx || G::bLevelTransition)
+	// Safety check - skip if entity is invalid, during level transitions, or not fully in game
+	if (!ecx || G::bLevelTransition || !I::EngineClient->IsInGame())
 	{
 		CALL_ORIGINAL(ecx, vel);
 		return;

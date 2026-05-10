@@ -23,6 +23,7 @@ public:
 	bool Init(const ProjSimInfo& info, bool no_vec_up = false);
 	void RunTick();
 	Vec3 GetOrigin();
+	Vec3 GetVelocity();
 };
 
 MAKE_SINGLETON_SCOPED(CProjectileSim, ProjectileSim, F);

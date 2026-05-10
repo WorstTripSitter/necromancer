@@ -3,6 +3,7 @@
 #include "inetchannel.h"
 
 MAKE_SIGNATURE(CBaseClientState_SendStringCmd, "engine.dll", "48 81 EC ? ? ? ? 48 8B 49", 0x0);
+MAKE_SIGNATURE(CBaseClientState_IsPaused, "engine.dll", "48 83 EC ? 80 B9 ? ? ? ? ? 75", 0x0);
 
 struct CUtlString
 {
@@ -71,6 +72,21 @@ public:
 	void SendStringCmd(const char* command)
 	{
 		reinterpret_cast<void(__fastcall*)(void*, const char*)>(Signatures::CBaseClientState_SendStringCmd.Get())(this, command);
+	}
+
+	inline bool IsConnected()
+	{
+		return m_nSignonState >= SIGNONSTATE_CONNECTED;
+	}
+
+	inline bool IsActive()
+	{
+		return m_nSignonState == SIGNONSTATE_FULL;
+	}
+
+	inline bool IsPaused()
+	{
+		return reinterpret_cast<bool(__thiscall*)(void*)>(Signatures::CBaseClientState_IsPaused.Get())(this);
 	}
 };
 

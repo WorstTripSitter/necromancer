@@ -2,6 +2,7 @@
 
 #include "../CFG.h"
 #include "../Materials/Materials.h"
+#include "../LagRecords/LagRecords.h"
 #include "../SpyCamera/SpyCamera.h"
 #include "../VisualUtils/VisualUtils.h"
 #include "../Players/Players.h"
@@ -173,6 +174,15 @@ void COutlines::RunModels()
 	if (!m_vecOutlineEntities.empty())
 		m_vecOutlineEntities.clear();
 
+	if (!m_vecOutlineLagRecords.empty())
+		m_vecOutlineLagRecords.clear();
+
+	if (!m_mapCapturedStates.empty())
+		m_mapCapturedStates.clear();
+
+	if (!m_mapCapturedInfos.empty())
+		m_mapCapturedInfos.clear();
+
 	if (!CFG::Outlines_Active || I::EngineVGui->IsGameUIVisible() || F::SpyCamera->IsRendering())
 		return;
 
@@ -297,6 +307,47 @@ void COutlines::RunModels()
 
 			if (!F::Materials->HasDrawn(pPlayer))
 				DrawEntity(pPlayer, true);
+
+			// Add lag records for enemy players as outline entries
+			if (!bIsTeammate && !bIsLocal && F::Outlines->ShouldRenderLagRecords(pPlayer))
+			{
+				const float flLagRecordAlpha = CFG::Outlines_LagRecords_Alpha;
+				int nRecords = 0;
+				if (F::LagRecords->HasRecords(pPlayer, &nRecords) && nRecords > 0)
+				{
+					const int nStyle = CFG::Materials_LagRecords_Style;
+					if (nStyle == 0)
+					{
+						for (int n = 1; n < nRecords; n++)
+						{
+							const auto pRecord = F::LagRecords->GetRecord(pPlayer, n, true);
+							if (!pRecord || !F::LagRecords->DiffersFromCurrent(pRecord))
+								continue;
+
+							const float flRecordAlpha = Math::RemapValClamped(static_cast<float>(n), 1.0f, static_cast<float>(nRecords), flLagRecordAlpha, 0.01f);
+							m_vecOutlineLagRecords.emplace_back(OutlineLagRecord_t{
+								pPlayer,
+								const_cast<matrix3x4_t*>(pRecord->BoneMatrix),
+								entColor,
+								flRecordAlpha
+							});
+						}
+					}
+					else
+					{
+						const auto pRecord = F::LagRecords->GetRecord(pPlayer, nRecords - 1, true);
+						if (pRecord && F::LagRecords->DiffersFromCurrent(pRecord))
+						{
+							m_vecOutlineLagRecords.emplace_back(OutlineLagRecord_t{
+								pPlayer,
+								const_cast<matrix3x4_t*>(pRecord->BoneMatrix),
+								entColor,
+								flLagRecordAlpha
+							});
+						}
+					}
+				}
+			}
 
 			C_BaseEntity* pAttach = pPlayer->FirstMoveChild();
 
@@ -528,7 +579,7 @@ void COutlines::Run()
 	I::RenderView->GetColorModulation(flOriginalColor);
 	const float flOriginalBlend = I::RenderView->GetBlend();
 
-	if (m_vecOutlineEntities.empty())
+	if (m_vecOutlineEntities.empty() && m_vecOutlineLagRecords.empty())
 		return;
 
 	I::ModelRender->ForcedMaterialOverride(m_pMatGlowColor);
@@ -545,6 +596,24 @@ void COutlines::Run()
 			I::RenderView->SetBlend(entity.m_flAlpha);
 			I::RenderView->SetColorModulation(ColorUtils::ToFloat(entity.m_Color.r), ColorUtils::ToFloat(entity.m_Color.g), ColorUtils::ToFloat(entity.m_Color.b));
 			DrawEntity(entity.m_pEntity, false);
+		}
+
+		// Render lag record outlines using DrawModelExecute directly with each record's BoneMatrix
+		// This avoids DrawModel's internal SetupBones recalculation that causes tearing
+		if (!m_vecOutlineLagRecords.empty() && m_fnDrawModelExecute)
+		{
+			for (const auto& lagRecord : m_vecOutlineLagRecords)
+			{
+				// Look up per-player captured state (different classes have different studio headers)
+				auto itState = m_mapCapturedStates.find(lagRecord.m_pPlayer);
+				auto itInfo = m_mapCapturedInfos.find(lagRecord.m_pPlayer);
+				if (itState == m_mapCapturedStates.end() || itInfo == m_mapCapturedInfos.end())
+					continue;
+
+				I::RenderView->SetBlend(lagRecord.m_flAlpha);
+				I::RenderView->SetColorModulation(ColorUtils::ToFloat(lagRecord.m_Color.r), ColorUtils::ToFloat(lagRecord.m_Color.g), ColorUtils::ToFloat(lagRecord.m_Color.b));
+				m_fnDrawModelExecute(I::ModelRender, itState->second, itInfo->second, lagRecord.m_pBoneMatrix);
+			}
 		}
 
 		stencilStateDisable.SetStencilState(pRC);
@@ -630,6 +699,7 @@ void COutlines::CleanUp()
 	// Clear entity lists to prevent any pending renders
 	m_mapDrawnEntities.clear();
 	m_vecOutlineEntities.clear();
+	m_vecOutlineLagRecords.clear();
 
 	// Null out pointers first before decrementing references
 	// This prevents race conditions where render thread checks pointer validity
@@ -692,4 +762,36 @@ void COutlines::SetModelStencil(IMatRenderContext* pRenderContext)
 	state.m_FailOp = STENCILOPERATION_KEEP;
 	state.m_ZFailOp = STENCILOPERATION_REPLACE;
 	state.SetStencilState(pRenderContext);
+}
+
+bool COutlines::ShouldRenderLagRecords(C_TFPlayer* pPlayer)
+{
+	if (!CFG::Outlines_LagRecords_Active)
+		return false;
+
+	// Use the shared base check (weapon type, enemy, records) without Materials-specific config
+	return CMaterials::ShouldRenderLagRecordsBase(pPlayer);
+}
+
+void COutlines::CaptureRenderState(const DrawModelState_t& state, ModelRenderInfo_t& pInfo)
+{
+	// Store per-player — different classes have different studio headers
+	const auto pPlayer = I::ClientEntityList->GetClientEntity(pInfo.entity_index);
+	if (pPlayer)
+	{
+		auto pTFPlayer = pPlayer->As<C_TFPlayer>();
+		if (pTFPlayer)
+		{
+			m_mapCapturedStates[pTFPlayer] = state;
+			m_mapCapturedInfos[pTFPlayer] = pInfo;
+		}
+	}
+}
+
+void COutlines::RenderLagRecords(C_TFPlayer* pPlayer)
+{
+	// Actual lag record outline rendering happens in Run() via m_vecOutlineLagRecords.
+	// This method exists to ensure the DrawModelExecute function pointer is available.
+	if (!m_fnDrawModelExecute && F::Materials->m_fnDrawModelExecute)
+		m_fnDrawModelExecute = F::Materials->m_fnDrawModelExecute;
 }

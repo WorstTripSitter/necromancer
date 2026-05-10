@@ -164,6 +164,11 @@ void CRapidFire::Run(CUserCmd* pCmd, bool* pSendPacket)
 		m_vShiftStart = pLocal->m_vecOrigin();
 		m_bStartedShiftOnGround = pLocal->m_fFlags() & FL_ONGROUND;
 
+		// Capture velocity at shift start for antiwarp
+		m_vShiftVelocity = pLocal->m_vecVelocity();
+		m_nShiftTick = 0;
+		m_nShiftTotal = F::Ticks->GetOptimalDTTicks();
+
 		pCmd->buttons &= ~IN_ATTACK;
 
 		if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
@@ -212,18 +217,65 @@ bool CRapidFire::ShouldExitCreateMove(CUserCmd* pCmd)
 			m_bSetCommand = true;
 		}
 
-		// Antiwarp
+		// Antiwarp — prevent positional warp during tick shifts while maintaining velocity
+		// When the server processes N shifted commands at once, the player "warps" forward.
+		// Antiwarp modifies movement inputs so the net displacement is minimal and the
+		// player ends the shift at their original speed.
+		//
+		// 3-phase approach (remaining ticks counts down as shift progresses):
+		// Phase 1 (high remaining, start of shift): reverse velocity direction
+		//   - Source acceleration means the player DECELERATES, doesn't instantly go backward
+		// Phase 2 (middle ticks): zero movement — friction coasts the player down
+		// Phase 3 (last 3 ticks): maintain original velocity — restores speed
 		if (CFG::Exploits_RapidFire_Antiwarp)
 		{
 			const auto pWeapon = H::Entities->GetWeapon();
-			
+
 			if (m_bStartedShiftOnGround || NeedsAirAntiwarp(pWeapon))
 			{
-				const float flScale = Math::RemapValClamped(
-					static_cast<float>(F::Ticks->GetOptimalDTTicks()), 14.0f, 22.0f, 0.605f, 1.0f);
-				SDKUtils::WalkTo(pCmd, pLocal->m_vecOrigin(), m_vShiftStart, flScale);
+				const float flSpeed = m_vShiftVelocity.Length2D();
+
+				if (flSpeed > 0.0f)
+				{
+					// Convert velocity direction to forwardmove/sidemove (same math as WalkTo)
+					Vec3 vVelDir;
+					Math::VectorAngles(m_vShiftVelocity, vVelDir);
+					const float flYawDelta = DEG2RAD(vVelDir.y - pCmd->viewangles.y);
+					const float flFwd = std::cosf(flYawDelta) * flSpeed;
+					const float flSide = -std::sinf(flYawDelta) * flSpeed;
+
+					const int iRemaining = m_nShiftTotal - m_nShiftTick;
+					const int iThreshold = std::max(m_nShiftTotal - 8, 3);
+
+					if (iRemaining > iThreshold)
+					{
+						// Phase 1: reverse velocity to counteract warp
+						pCmd->forwardmove = -flFwd;
+						pCmd->sidemove = -flSide;
+					}
+					else if (iRemaining > 3)
+					{
+						// Phase 2: zero movement — coast
+						pCmd->forwardmove = 0.0f;
+						pCmd->sidemove = 0.0f;
+					}
+					else
+					{
+						// Phase 3: maintain original velocity
+						pCmd->forwardmove = flFwd;
+						pCmd->sidemove = flSide;
+					}
+				}
+				else
+				{
+					pCmd->forwardmove = 0.0f;
+					pCmd->sidemove = 0.0f;
+				}
 			}
+			// Air antiwarp not needed for this weapon/shift state
 		}
+
+		m_nShiftTick++;
 
 		return true;
 	}
@@ -439,6 +491,11 @@ void CRapidFire::RunFastSticky(CUserCmd* pCmd, bool* pSendPacket)
 
 		m_vShiftStart = pLocal->m_vecOrigin();
 		m_bStartedShiftOnGround = pLocal->m_fFlags() & FL_ONGROUND;
+
+		// Capture velocity at shift start for antiwarp
+		m_vShiftVelocity = pLocal->m_vecVelocity();
+		m_nShiftTick = 0;
+		m_nShiftTotal = nTicksToUse;
 
 		*pSendPacket = true;
 	}

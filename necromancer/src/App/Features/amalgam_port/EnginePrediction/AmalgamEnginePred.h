@@ -13,11 +13,12 @@ struct DatamapRestore_t
 };
 
 // Restore info for player adjustment
-struct RestoreInfo_t
+struct AmalgamRestoreInfo_t
 {
     Vec3 m_vOrigin = {};
     Vec3 m_vMins = {};
     Vec3 m_vMaxs = {};
+    bool m_bActive = false;
 };
 
 // ============================================
@@ -37,7 +38,9 @@ private:
 
     DatamapRestore_t m_tLocal = {};
 
-    std::unordered_map<C_TFPlayer*, RestoreInfo_t> m_mRestore = {};
+    // Flat array indexed by entity index - O(1) lookup, no hash overhead
+    static constexpr int MAX_RESTORE_SLOTS = 65;
+    AmalgamRestoreInfo_t m_mRestore[MAX_RESTORE_SLOTS] = {};
 
 public:
     void Start(C_TFPlayer* pLocal, CUserCmd* pCmd);

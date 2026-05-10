@@ -5,6 +5,7 @@
 struct LagRecord_t
 {
 	C_TFPlayer* Player = nullptr;
+	int PlayerIndex = 0;	// Entity index for safe validation (avoids virtual call on dangling pointer)
 	matrix3x4_t BoneMatrix[128] = {};
 	float SimulationTime = -1.0f;
 	Vec3 AbsOrigin = {};
@@ -13,8 +14,12 @@ struct LagRecord_t
 	Vec3 EyeAngles = {};
 	Vec3 Velocity = {};
 	Vec3 Center = {};
+	Vec3 VecMinsPreScaled = {};  // Server lag comp restores these (LC_SIZE_CHANGED)
+	Vec3 VecMaxsPreScaled = {};
 	int Flags = 0;
 	float FeetYaw = 0.0f;
+	bool bIsAlive = false;  // Server checks LC_ALIVE flag - dead records are invalid
+	bool bInvalid = false;  // Marked when player teleported (sv_lagcompensation_teleport_dist) — bones/origin are stale
 };
 
 struct Sequence_t
@@ -24,9 +29,14 @@ struct Sequence_t
 	float flTime = 0.f;
 };
 
+// Max entity index for players (TF2 supports up to 33 players, indices 1-32)
+constexpr int MAX_LAG_RECORDS_SLOTS = 65;
+
 class CLagRecords
 {
-	std::unordered_map<C_TFPlayer*, std::deque<LagRecord_t>> m_LagRecords = {};
+	// Flat array indexed by entity index - O(1) lookup, no hash overhead, great cache locality
+	// Replaces unordered_map<C_TFPlayer*, deque<LagRecord_t>> which had hash + allocation overhead
+	std::deque<LagRecord_t> m_LagRecords[MAX_LAG_RECORDS_SLOTS] = {};
 	bool m_bSettingUpBones = false;
 
 	// Fake latency system (Amalgam-style)
@@ -40,12 +50,61 @@ class CLagRecords
 	float m_flFakeLatency = 0.0f;
 	float m_flWishFakeLatency = 0.0f;
 
+	// Teleport dist tracking per player (Amalgam-style)
+	bool m_bLagCompensation[MAX_LAG_RECORDS_SLOTS] = {};
+
+	// Cached per-frame values to avoid repeated NetChannel queries
+	mutable float m_flCachedServerAcceptedAge = -1.0f;
+	mutable float m_flCachedAgeRange = -1.0f;
+	mutable int m_nCacheFrame = -1;
+
 	bool IsSimulationTimeValid(float flCurSimTime, float flCmprSimTime);
 
 public:
+	// Server validation: |fake_latency + lerp - clientAge| <= ageRange (see .cpp for full derivation)
+	// The ideal client-side record age is fake_latency + lerp
+	float GetServerAcceptedAge() const;
+	float GetServerAcceptedAgeRange() const;  // Dynamic: based on real ping (not fake latency)
+	bool IsRecordAgeValidForServer(float flRecordAge) const;
+
+	// Record interpolation matching server's BacktrackPlayer
+	static LagRecord_t InterpolateRecords(const LagRecord_t* pOlder, const LagRecord_t* pNewer, float flFrac)
+	{
+		LagRecord_t out = {};
+		out.Player = pNewer->Player;
+		out.SimulationTime = std::lerp(pOlder->SimulationTime, pNewer->SimulationTime, flFrac);
+
+		// Vec3 has no static Lerp — use component-wise interpolation
+		// LerpAngle is a member function: a.LerpAngle(b, t)
+		out.AbsOrigin = pOlder->AbsOrigin + (pNewer->AbsOrigin - pOlder->AbsOrigin) * flFrac;
+		out.VecOrigin = pOlder->VecOrigin + (pNewer->VecOrigin - pOlder->VecOrigin) * flFrac;
+		out.AbsAngles = pOlder->AbsAngles.LerpAngle(pNewer->AbsAngles, flFrac);
+		out.VecMinsPreScaled = pOlder->VecMinsPreScaled + (pNewer->VecMinsPreScaled - pOlder->VecMinsPreScaled) * flFrac;
+		out.VecMaxsPreScaled = pOlder->VecMaxsPreScaled + (pNewer->VecMaxsPreScaled - pOlder->VecMaxsPreScaled) * flFrac;
+		out.bIsAlive = pNewer->bIsAlive;
+		out.EyeAngles = pOlder->EyeAngles.LerpAngle(pNewer->EyeAngles, flFrac);
+		out.Velocity = pOlder->Velocity + (pNewer->Velocity - pOlder->Velocity) * flFrac;
+		out.Center = pOlder->Center + (pNewer->Center - pOlder->Center) * flFrac;
+		out.Flags = pNewer->Flags;
+		out.FeetYaw = std::lerp(pOlder->FeetYaw, pNewer->FeetYaw, flFrac);
+
+		// Bones: use the closer record's bones (can't meaningfully interpolate 3x4 matrices)
+		if (flFrac < 0.5f)
+			memcpy(out.BoneMatrix, pOlder->BoneMatrix, sizeof(out.BoneMatrix));
+		else
+			memcpy(out.BoneMatrix, pNewer->BoneMatrix, sizeof(out.BoneMatrix));
+
+		return out;
+	}
+
+	LagRecord_t GetInterpolatedRecord(C_TFPlayer* pPlayer, float flTargetSimTime, bool* pOutIsInterpolated = nullptr);
+
+	// Get outgoing latency (cached per frame)
+	float GetOutgoingLatency() const;
+
 	void UpdateDatagram();
 	void AddRecord(C_TFPlayer* pPlayer);
-	const LagRecord_t* GetRecord(C_TFPlayer* pPlayer, int nRecord, bool bSafe = false);
+	const LagRecord_t* GetRecord(C_TFPlayer* pPlayer, int nRecord, bool bSafe = true);
 	bool HasRecords(C_TFPlayer* pPlayer, int* pTotalRecords = nullptr);
 	void UpdateRecords();
 	bool DiffersFromCurrent(const LagRecord_t* pRecord);
@@ -66,6 +125,10 @@ class CLagRecordMatrixHelper
 	C_TFPlayer* m_pPlayer = nullptr;
 	Vec3 m_vAbsOrigin = {};
 	Vec3 m_vAbsAngles = {};
+	Vec3 m_vRestoreMinsPreScaled = {};  // Server restores OBBMinsPreScaled (LC_SIZE_CHANGED)
+	Vec3 m_vRestoreMaxsPreScaled = {};  // Server restores OBBMaxsPreScaled (LC_SIZE_CHANGED)
+	Vec3 m_vRestoreMins = {};           // Actual collision bounds used by trace
+	Vec3 m_vRestoreMaxs = {};
 	matrix3x4_t m_BoneMatrix[128] = {};
 
 	bool m_bSuccessfullyStored = false;
@@ -73,6 +136,9 @@ class CLagRecordMatrixHelper
 public:
 	void Set(const LagRecord_t* pRecord);
 	void Restore();
+	bool WasSuccessful() const { return m_bSuccessfullyStored; }
+	C_TFPlayer* GetRestoringPlayer() const { return m_pPlayer; }
+	bool IsRestoringPlayer(C_TFPlayer* pPlayer) const { return m_bSuccessfullyStored && m_pPlayer && m_pPlayer == pPlayer; }
 };
 
 MAKE_SINGLETON_SCOPED(CLagRecordMatrixHelper, LagRecordMatrixHelper, F);

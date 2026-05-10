@@ -108,7 +108,7 @@ MAKE_HOOK(IVEngineClient013_ClientCmd, Memory::GetVFunc(I::EngineClient, 7), voi
 
 		const auto pWeapon = H::Entities->GetWeapon();
 
-		if (!pWeapon)
+		if (!pWeapon || !H::Entities->IsEntityValid(pWeapon))
 			return false;
 
 		const auto pAnimState = pLocal->GetAnimState();

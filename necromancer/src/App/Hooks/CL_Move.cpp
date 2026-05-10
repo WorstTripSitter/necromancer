@@ -8,13 +8,23 @@
 #include "../Features/AutoQueue/AutoQueue.h"
 #include "../Features/FakeAngle/FakeAngle.h"
 #include "../Features/TickbaseManip/TickbaseManip.h"
+#include "../Features/Networking/Networking.h"
 
 MAKE_SIGNATURE(CL_Move, "engine.dll", "40 55 53 48 8D AC 24 ? ? ? ? B8 ? ? ? ? E8 ? ? ? ? 48 2B E0 83 3D", 0x0);
-MAKE_SIGNATURE(net_time, "engine.dll", "F2 0F 10 0D ? ? ? ? F2 0F 5C 0D", 0x4);
 
 MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	float accumulated_extra_samples, bool bFinalTick)
 {
+	// During signon (not fully in game), call the original engine CL_Move.
+	// The rebuilt CL_Move has subtle differences in signon handling that can
+	// cause "Parsing game info" to hang indefinitely. Only use the rebuilt
+	// version when fully in-game for tick manipulation (shifting/recharging).
+	if (!I::ClientState->IsActive())
+	{
+		CALL_ORIGINAL(accumulated_extra_samples, bFinalTick);
+		return;
+	}
+
 	// Apply ping reducer BEFORE anything else
 	F::NetworkFix->ApplyPingReducer();
 	F::NetworkFix->ApplyAutoInterp();
@@ -82,7 +92,7 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	auto callOriginal = [&](bool bFinal)
 	{
 		G::UpdatePathStorage();
-		CALL_ORIGINAL(accumulated_extra_samples, bFinal);
+		F::Networking->CL_Move(accumulated_extra_samples, bFinal);
 	};
 
 	// RapidFire/DoubleTap shifting
@@ -199,16 +209,4 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	}
 
 	callOriginal(bFinalTick);
-
-	// Optimal command rate fix
-	if (I::EngineClient->IsInGame() && I::ClientState->m_nSignonState >= 6)
-	{
-		const double flNetTime = *reinterpret_cast<double*>(Signatures::net_time.Get());
-		I::ClientState->m_flNextCmdTime = flNetTime + I::GlobalVars->interval_per_tick;
-	}
-	else
-	{
-		const double flNetTime = *reinterpret_cast<double*>(Signatures::net_time.Get());
-		I::ClientState->m_flNextCmdTime = flNetTime + 0.2;
-	}
 }

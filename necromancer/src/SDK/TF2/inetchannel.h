@@ -23,13 +23,29 @@ public:
 	virtual void ProcessPlayback(void) = 0;
 	virtual bool ProcessStream(void) = 0;
 	virtual void ProcessPacket(struct netpacket_s *packet, bool bHasHeader) = 0;
-	virtual bool SendNetMsg(INetMessage &msg, bool bForceReliable = false, bool bVoice = false) = 0;
+	virtual bool SendNetMsgWrong(INetMessage &msg, bool bForceReliable = false, bool bVoice = false) = 0;
+	// vfunc-based SendNetMsg - uses hardcoded vtable index for reliability
+	bool SendNetMsg(INetMessage &msg, bool bForceReliable = false, bool bVoice = false)
+	{
+		return Memory::get_vfunc<bool(__thiscall*)(void*, INetMessage&, bool, bool)>(this, 37)(this, msg, bForceReliable, bVoice);
+	}
 	virtual bool SendData(bf_write &msg, bool bReliable = true) = 0;
 	virtual bool SendFile(const char *filename, unsigned int transferID) = 0;
 	virtual void DenyFile(const char *filename, unsigned int transferID) = 0;
 	virtual void RequestFile_OLD(const char *filename, unsigned int transferID) = 0;
-	virtual void SetChoked(void) = 0;
-	virtual int SendDatagram(bf_write *data) = 0;
+	virtual void SetChokedWrong(void) = 0;
+	// vfunc-based SetChoked - uses hardcoded vtable index for reliability
+	void SetChoked()
+	{
+		return Memory::get_vfunc<void(__thiscall*)(void*)>(this, 42)(this);
+	}
+	virtual int SendDatagramWrong(bf_write *data) = 0;
+	// vfunc-based SendDatagram - uses hardcoded vtable index for reliability
+	int SendDatagram(bf_write *write)
+	{
+		typedef int(__thiscall* fn)(void*, bf_write*);
+		return Memory::get_vfunc<fn>(this, 43)(this, write);
+	}
 	virtual bool Transmit(bool onlyReliable = false) = 0;
 	virtual const netadr_t &GetRemoteAddress(void) const = 0;
 	virtual INetChannelHandler *GetMsgHandler(void) const = 0;
@@ -39,7 +55,12 @@ public:
 	virtual void GetSequenceData(int &nOutSequenceNr, int &nInSequenceNr, int &nOutSequenceNrAck) = 0;
 	virtual void SetSequenceData(int nOutSequenceNr, int nInSequenceNr, int nOutSequenceNrAck) = 0;
 	virtual void UpdateMessageStats(int msggroup, int bits) = 0;
-	virtual bool CanPacket(void) const = 0;
+	virtual bool CanPacketWrong(void) const = 0;
+	// vfunc-based CanPacket - uses hardcoded vtable index for reliability
+	bool CanPacket()
+	{
+		return Memory::get_vfunc<bool(__thiscall*)(void*)>(this, 53)(this);
+	}
 	virtual bool IsOverflowed(void) const = 0;
 	virtual bool IsTimedOut(void) const = 0;
 	virtual bool HasPendingReliableData(void) = 0;

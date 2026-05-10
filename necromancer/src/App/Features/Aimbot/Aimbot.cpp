@@ -37,17 +37,15 @@ void CAimbot::RunMain(CUserCmd* pCmd)
 	const auto pLocal = H::Entities->GetLocal();
 	const auto pWeapon = H::Entities->GetWeapon();
 
-	// Cache for reuse in Run() - avoids duplicate virtual calls
-	m_pCachedLocal = pLocal;
-	m_pCachedWeapon = pWeapon;
-
 	if (!pLocal || !pWeapon
+		|| !H::Entities->SafeIsEntityValid(pLocal, I::EngineClient->GetLocalPlayer())
 		|| pLocal->deadflag()
 		|| pLocal->InCond(TF_COND_TAUNTING) || pLocal->InCond(TF_COND_PHASE)
 		|| pLocal->InCond(TF_COND_HALLOWEEN_GHOST_MODE)
 		|| pLocal->InCond(TF_COND_HALLOWEEN_BOMB_HEAD)
 		|| pLocal->InCond(TF_COND_HALLOWEEN_KART)
 		|| pLocal->m_bFeignDeathReady() || pLocal->m_flInvisibility() > 0.0f
+		|| !H::Entities->IsEntityValid(pWeapon)
 		|| pWeapon->m_iItemDefinitionIndex() == Soldier_m_RocketJumper || pWeapon->m_iItemDefinitionIndex() == Demoman_s_StickyJumper)
 		return;
 
@@ -96,11 +94,15 @@ void CAimbot::Run(CUserCmd* pCmd)
 {
 	RunMain(pCmd);
 
-	// Reuse cached values from RunMain() instead of re-fetching
-	const auto pLocal = m_pCachedLocal;
-	const auto pWeapon = m_pCachedWeapon;
+	// Re-fetch from engine instead of using cached values.
+	// Entities can be destroyed during RunMain() (class change, death),
+	// making cached pointers dangling. Fresh fetches guarantee validity.
+	const auto pLocal = H::Entities->GetLocal();
+	const auto pWeapon = H::Entities->GetWeapon();
 
 	if (!pLocal || !pWeapon
+		|| !H::Entities->SafeIsEntityValid(pLocal, I::EngineClient->GetLocalPlayer())
+		|| !H::Entities->IsEntityValid(pWeapon)
 		|| pLocal->deadflag()
 		|| pLocal->InCond(TF_COND_TAUNTING) || pLocal->InCond(TF_COND_PHASE)
 		|| pLocal->m_bFeignDeathReady() || pLocal->m_flInvisibility() > 0.0f)

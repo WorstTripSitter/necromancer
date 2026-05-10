@@ -95,11 +95,12 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 		if (flCurTime < pSticky->m_flCreationTime() + flArmTime)
 			continue;
 
-		// Cache sticky position and radius
+		// Cache sticky position, index, and radius — used multiple times below
 		// TF2 stickybomb splash radius is 146 units (same as pipes/rockets)
 		const Vec3 vStickyPos = pSticky->GetCenter();
+		const int nStickyIndex = pSticky->entindex();
 		const float flRadius = 146.0f;
-		const float flRadiusSqr = flRadius * flRadius; // Use squared distance for faster checks
+		const float flRadiusSqr = flRadius * flRadius;
 
 		// Auto detonate players
 		if (CFG::Triggerbot_AutoDetonate_Target_Players)
@@ -139,8 +140,6 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 						else
 						{
 							// Timer enabled path
-							const int stickyIndex = pSticky->entindex();
-
 							// 4.2: Check danger zone first (if enabled)
 							if (CFG::Triggerbot_AutoDetonate_DangerZone_Enabled)
 							{
@@ -153,7 +152,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 							if (!bShouldDetonate)
 							{
 								// Find tracking data for this enemy
-								auto& trackingList = m_mStickyEnemyTracking[stickyIndex];
+							auto& trackingList = m_mStickyEnemyTracking[nStickyIndex];
 								bool bFoundTracking = false;
 								
 								for (const auto& tracking : trackingList)
@@ -180,7 +179,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 								}
 								
 								// 4.3: Update enemy tracking data each frame (AFTER checking movement)
-								UpdateEnemyTracking(stickyIndex, pPlayer, vStickyPos, flCurTime);
+								UpdateEnemyTracking(nStickyIndex, pPlayer, vStickyPos, flCurTime);
 							}
 						}
 
@@ -188,7 +187,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 						{
 							if (pSticky->m_bDefensiveBomb())
 							{
-								const Vec3 vAngle = Math::CalcAngle(pLocal->GetShootPos(), pSticky->GetCenter());
+								const Vec3 vAngle = Math::CalcAngle(pLocal->GetShootPos(), vStickyPos);
 								H::AimUtils->FixMovement(pCmd, vAngle);
 								pCmd->viewangles = vAngle;
 								G::bSilentAngles = true;
@@ -199,7 +198,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 							// 4.5: Clear tracking data on detonation
 							if (CFG::Triggerbot_AutoDetonate_Timer_Enabled)
 							{
-								ClearStickyTracking(pSticky->entindex());
+								ClearStickyTracking(nStickyIndex);
 							}
 
 							return;
@@ -211,7 +210,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 					// 4.5: Clear tracking for enemies that exit radius
 					if (CFG::Triggerbot_AutoDetonate_Timer_Enabled)
 					{
-						auto& trackingList = m_mStickyEnemyTracking[pSticky->entindex()];
+						auto& trackingList = m_mStickyEnemyTracking[nStickyIndex];
 						trackingList.erase(
 							std::remove_if(trackingList.begin(), trackingList.end(),
 								[pPlayer](const EnemyTrackingData& tracking) {
@@ -248,7 +247,6 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 						else
 						{
 							// Timer enabled path
-							const int stickyIndex = pSticky->entindex();
 
 							// 4.2: Check danger zone first (if enabled)
 							if (CFG::Triggerbot_AutoDetonate_DangerZone_Enabled)
@@ -262,7 +260,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 							if (!bShouldDetonate)
 							{
 								// Find tracking data for this building
-								auto& trackingList = m_mStickyEnemyTracking[stickyIndex];
+							auto& trackingList = m_mStickyEnemyTracking[nStickyIndex];
 								bool bFoundTracking = false;
 								
 								for (const auto& tracking : trackingList)
@@ -289,7 +287,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 								}
 								
 								// 4.3: Update enemy tracking data each frame (AFTER checking movement)
-								UpdateEnemyTracking(stickyIndex, pBuildingEntity, vStickyPos, flCurTime);
+								UpdateEnemyTracking(nStickyIndex, pBuildingEntity, vStickyPos, flCurTime);
 							}
 						}
 
@@ -297,7 +295,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 						{
 							if (pSticky->m_bDefensiveBomb())
 							{
-								const Vec3 vAngle = Math::CalcAngle(pLocal->GetShootPos(), pSticky->GetCenter());
+								const Vec3 vAngle = Math::CalcAngle(pLocal->GetShootPos(), vStickyPos);
 								H::AimUtils->FixMovement(pCmd, vAngle);
 								pCmd->viewangles = vAngle;
 								G::bSilentAngles = true;
@@ -308,7 +306,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 							// 4.5: Clear tracking data on detonation
 							if (CFG::Triggerbot_AutoDetonate_Timer_Enabled)
 							{
-								ClearStickyTracking(pSticky->entindex());
+								ClearStickyTracking(nStickyIndex);
 							}
 
 							return;
@@ -320,7 +318,7 @@ void CAutoDetonate::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 					// 4.5: Clear tracking for buildings that exit radius
 					if (CFG::Triggerbot_AutoDetonate_Timer_Enabled)
 					{
-						auto& trackingList = m_mStickyEnemyTracking[pSticky->entindex()];
+						auto& trackingList = m_mStickyEnemyTracking[nStickyIndex];
 						trackingList.erase(
 							std::remove_if(trackingList.begin(), trackingList.end(),
 								[pBuildingEntity](const EnemyTrackingData& tracking) {

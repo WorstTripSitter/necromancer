@@ -115,8 +115,9 @@ bool CSeedPred::ParsePlayerPerf(bf_read& msgData)
 
 	// playerperf format: "servertime ticks ents simtime frametime vel velocity"
 	// Example: "12345.67 1000 50 0.015 0.015 vel 320.00"
+	static const std::regex s_PlayerPerfRegex(R"((\d+\.\d+)\s\d+\s\d+\s\d+\.\d+\s\d+\.\d+\svel\s\d+\.\d+)");
 	std::smatch matches{};
-	std::regex_match(msg, matches, std::regex(R"((\d+.\d+)\s\d+\s\d+\s\d+.\d+\s\d+.\d+\svel\s\d+.\d+)"));
+	std::regex_match(msg, matches, s_PlayerPerfRegex);
 
 	if (matches.size() == 2)
 	{
@@ -176,7 +177,8 @@ bool CSeedPred::ParsePlayerPerf(bf_read& msgData)
 		return true;
 	}
 
-	return std::regex_match(msg, std::regex(R"(\d+.\d+\s\d+\s\d+)"));
+	static const std::regex s_PartialPerfRegex(R"(\d+\.\d+\s\d+\s\d+)");
+	return std::regex_match(msg, s_PartialPerfRegex);
 }
 
 int CSeedPred::GetSeed() const

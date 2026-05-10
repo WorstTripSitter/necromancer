@@ -143,6 +143,7 @@ private:
 	int m_StringLength;
 	float m_fValue;
 	int m_nValue;
+public:
 	bool m_bHasMin;
 	float m_fMinVal;
 	bool m_bHasMax;

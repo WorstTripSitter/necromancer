@@ -5,7 +5,9 @@
 // account for interp and origin compression when simulating local player
 void CAmalgamEnginePrediction::AdjustPlayers(C_BaseEntity* pLocal)
 {
-	m_mRestore.clear();
+	// Clear all restore slots
+	for (int i = 0; i < MAX_RESTORE_SLOTS; i++)
+		m_mRestore[i].m_bActive = false;
 
 	for (auto pEntity : g_AmalgamEntitiesExt.GetGroup(EntityEnum::PlayerAll))
 	{
@@ -13,7 +15,11 @@ void CAmalgamEnginePrediction::AdjustPlayers(C_BaseEntity* pLocal)
 		if (pPlayer == pLocal || !IsAlive(pPlayer) || IsAGhost(pPlayer))
 			continue;
 
-		m_mRestore[pPlayer] = { pPlayer->GetAbsOrigin(), pPlayer->m_vecMins(), pPlayer->m_vecMaxs() };
+		const int nIdx = pPlayer->entindex();
+		if (nIdx < 0 || nIdx >= MAX_RESTORE_SLOTS)
+			continue;
+
+		m_mRestore[nIdx] = { pPlayer->GetAbsOrigin(), pPlayer->m_vecMins(), pPlayer->m_vecMaxs(), true };
 
 		pPlayer->SetAbsOrigin(pPlayer->m_vecOrigin());
 		pPlayer->m_vecMins() += 0.125f;
@@ -22,11 +28,25 @@ void CAmalgamEnginePrediction::AdjustPlayers(C_BaseEntity* pLocal)
 }
 void CAmalgamEnginePrediction::RestorePlayers()
 {
-	for (auto& [pPlayer, tRestore] : m_mRestore)
+	for (int i = 0; i < MAX_RESTORE_SLOTS; i++)
 	{
+		auto& tRestore = m_mRestore[i];
+		if (!tRestore.m_bActive)
+			continue;
+
+		// Look up entity by index - no dangling pointer risk
+		const auto pEntity = I::ClientEntityList->GetClientEntity(i);
+		if (!pEntity)
+			continue;
+
+		auto pPlayer = pEntity->As<CTFPlayer>();
+		if (!pPlayer)
+			continue;
+
 		pPlayer->SetAbsOrigin(tRestore.m_vOrigin);
 		pPlayer->m_vecMins() = tRestore.m_vMins;
 		pPlayer->m_vecMaxs() = tRestore.m_vMaxs;
+		tRestore.m_bActive = false;
 	}
 }
 

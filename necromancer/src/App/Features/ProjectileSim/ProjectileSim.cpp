@@ -1,4 +1,5 @@
 #include "ProjectileSim.h"
+#include "../amalgam_port/AmalgamCompat.h"
 
 static IPhysicsEnvironment* env{};
 static IPhysicsObject* obj{};
@@ -13,6 +14,13 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 	auto cur_time{ static_cast<float>(player->m_nTickBase()) * TICK_INTERVAL };
 	auto ducking{ player->m_fFlags() & FL_DUCKING };
 
+	// Predict duck state for airborne instant-duck (CrouchWhileAirborne)
+	if (!ducking && G::CurrentUserCmd && (G::CurrentUserCmd->buttons & IN_DUCK) && !(player->m_fFlags() & FL_ONGROUND))
+		ducking = true;
+
+	// Use predicted shoot position for consistent duck handling
+	const Vec3 vPredictedShootPos = SDK::GetPredictedShootPos(player);
+
 	Vec3 pos{};
 	Vec3 ang{};
 
@@ -20,7 +28,7 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 	{
 	case TF_WEAPON_GRENADELAUNCHER:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 8.0f, -6.0f }, angles, pos, ang, true);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 8.0f, -6.0f }, angles, pos, ang, true, vPredictedShootPos);
 
 		auto is_lochnload{ weapon->m_iItemDefinitionIndex() == Demoman_m_TheLochnLoad };
 		auto speed{ SDKUtils::AttribHookValue(1200.0, "mult_projectile_speed", weapon) };
@@ -32,7 +40,7 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 
 	case TF_WEAPON_PIPEBOMBLAUNCHER:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 8.0f, -6.0f }, angles, pos, ang, true);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 8.0f, -6.0f }, angles, pos, ang, true, vPredictedShootPos);
 
 		auto charge_begin_time{ weapon->As<C_TFPipebombLauncher>()->m_flChargeBeginTime() };
 		auto charge{ cur_time - charge_begin_time };
@@ -50,7 +58,7 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 
 	case TF_WEAPON_CANNON:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 8.0f, -6.0f }, angles, pos, ang, true);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 8.0f, -6.0f }, angles, pos, ang, true, vPredictedShootPos);
 
 		out = { TF_PROJECTILE_CANNONBALL, pos, ang, 1454.0f, 1.0f, false };
 
@@ -59,7 +67,7 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 
 	case TF_WEAPON_FLAREGUN:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 12.0f, ducking ? 8.0f : -3.0f }, angles, pos, ang, false);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 12.0f, ducking ? 8.0f : -3.0f }, angles, pos, ang, false, vPredictedShootPos);
 
 		out = { TF_PROJECTILE_FLARE, pos, ang, 2000.0f, 0.3f, true };
 
@@ -68,7 +76,7 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 
 	case TF_WEAPON_FLAREGUN_REVENGE:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 12.0f, ducking ? 8.0f : -3.0f }, angles, pos, ang, false);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 12.0f, ducking ? 8.0f : -3.0f }, angles, pos, ang, false, vPredictedShootPos);
 
 		out = { TF_PROJECTILE_FLARE, pos, ang, 3000.0f, 0.45f, true };
 
@@ -77,7 +85,7 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 
 	case TF_WEAPON_COMPOUND_BOW:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 8.0f, -3.0f }, angles, pos, ang, false);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 8.0f, -3.0f }, angles, pos, ang, false, vPredictedShootPos);
 
 		auto charge_begin_time{ weapon->As<C_TFPipebombLauncher>()->m_flChargeBeginTime() };
 		auto charge{ cur_time - charge_begin_time };
@@ -98,7 +106,7 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 	case TF_WEAPON_CROSSBOW:
 	case TF_WEAPON_SHOTGUN_BUILDING_RESCUE:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 8.0f, -3.0f }, angles, pos, ang, false);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 23.5f, 8.0f, -3.0f }, angles, pos, ang, false, vPredictedShootPos);
 
 		out = { TF_PROJECTILE_ARROW, pos, ang, 2400.0f, 0.2f, true };
 
@@ -107,11 +115,9 @@ bool CProjectileSim::GetInfo(C_TFPlayer* player, C_TFWeaponBase* weapon, const V
 
 	case TF_WEAPON_SYRINGEGUN_MEDIC:
 	{
-		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 6.0f, -8.0f }, angles, pos, ang, false);
+		SDKUtils::GetProjectileFireSetupRebuilt(player, { 16.0f, 6.0f, -8.0f }, angles, pos, ang, false, vPredictedShootPos);
 
 		out = { TF_PROJECTILE_SYRINGE, pos, ang, 1000.0f, 0.3f, true };
-
-		return true;
 
 		return true;
 	}
@@ -322,6 +328,20 @@ Vec3 CProjectileSim::GetOrigin()
 	Vec3 out{};
 
 	obj->GetPosition(&out, nullptr);
+
+	return out;
+}
+
+Vec3 CProjectileSim::GetVelocity()
+{
+	if (!obj)
+	{
+		return {};
+	}
+
+	Vec3 out{};
+
+	obj->GetVelocity(&out, nullptr);
 
 	return out;
 }

@@ -160,3 +160,50 @@ public:
 
 	CUtlVector<CVar_t> m_ConVars;
 };
+
+#define NET_TICK_SCALEUP	100000.0f
+
+class NET_Tick : public CNetMessage
+{
+public:
+	bool WriteToBuffer(bf_write& buffer)
+	{
+		buffer.WriteUBitLong(GetType(), NETMSG_TYPE_BITS);
+		buffer.WriteLong(m_nTick);
+		buffer.WriteUBitLong(std::clamp((int)(NET_TICK_SCALEUP * m_flHostFrameTime), 0, 65535), 16);
+		buffer.WriteUBitLong(std::clamp((int)(NET_TICK_SCALEUP * m_flHostFrameTimeStdDeviation), 0, 65535), 16);
+		return !buffer.IsOverflowed();
+	}
+
+	bool ReadFromBuffer(bf_read& buffer)
+	{
+		m_nTick = buffer.ReadLong();
+		m_flHostFrameTime = (float)buffer.ReadUBitLong(16) / NET_TICK_SCALEUP;
+		m_flHostFrameTimeStdDeviation = (float)buffer.ReadUBitLong(16) / NET_TICK_SCALEUP;
+		return !buffer.IsOverflowed();
+	}
+
+	const char* ToString(void) const { return "NET_Tick"; }
+	int GetType() const { return net_Tick; }
+	const char* GetName() const { return "net_Tick"; }
+
+	NET_Tick()
+	{
+		m_bReliable = false;
+		m_flHostFrameTime = 0;
+		m_flHostFrameTimeStdDeviation = 0;
+	};
+
+	NET_Tick(int tick, float hostFrametime, float hostFrametime_stddeviation)
+	{
+		m_bReliable = false;
+		m_nTick = tick;
+		m_flHostFrameTime = hostFrametime;
+		m_flHostFrameTimeStdDeviation = hostFrametime_stddeviation;
+	};
+
+public:
+	int			m_nTick;
+	float		m_flHostFrameTime;
+	float		m_flHostFrameTimeStdDeviation;
+};

@@ -268,6 +268,42 @@ void CMaterials::Initialize()
 
 		m_pShadedNoInvis = I::MaterialSystem->CreateMaterial("seo_material_shaded_no_invis", kv);
 	}
+
+	if (!m_pSheen)
+	{
+		// Additive sheen overlay material — drawn as a second pass on top of the weapon.
+		// $color [0 0 0] makes the base texture render as black.
+		// $additive 1 means the black base adds 0 to the framebuffer,
+		// so only the AnimatedWeaponSheen proxy's scrolling sheenmap gets added on top.
+		auto* kv = new KeyValues("VertexLitGeneric");
+		kv->SetString("$basetexture", "vgui/white_additive");
+		kv->SetString("$color", "[0 0 0]");					// black base = adds nothing with additive
+		kv->SetString("$color2", "[0 0 0]");
+		kv->SetString("$sheenmap", "Effects/AnimatedSheen/animatedsheen0");
+		kv->SetString("$sheenmapmask", "Effects/AnimatedSheen/animatedsheen0");
+		kv->SetString("$sheenmapframe", "0");
+		kv->SetString("$sheenmaptint", "[1 1 1]");
+		kv->SetString("$sheenindex", "1");
+		kv->SetString("$sheenmapmaskscaleX", "1");
+		kv->SetString("$sheenmapmaskscaleY", "1");
+		kv->SetString("$sheenmapmaskoffsetX", "0");
+		kv->SetString("$sheenmapmaskoffsetY", "0");
+		kv->SetString("$sheenmapmaskdirection", "0");
+		kv->SetString("$additive", "1");
+		kv->SetString("$nodecal", "1");
+		kv->SetString("$model", "1");
+		if (const auto proxies = kv->FindKey("Proxies", true))
+		{
+			auto* pSheenProxy = proxies->FindKey("AnimatedWeaponSheen", true);
+			pSheenProxy->SetString("animatedTextureVar", "$sheenmap");
+			pSheenProxy->SetString("animatedTextureFrameNumVar", "$sheenmapframe");
+			proxies->FindKey("invis", true);
+		}
+
+		m_pSheen = I::MaterialSystem->CreateMaterial("seo_material_sheen", kv);
+		m_pSheenIndex = m_pSheen->FindVar("$sheenindex", nullptr);
+		m_pSheenTint = m_pSheen->FindVar("$sheenmaptint", nullptr);
+	}
 }
 
 void CMaterials::DrawEntity(C_BaseEntity* pEntity)
@@ -300,47 +336,75 @@ void CMaterials::DrawEntity(C_BaseEntity* pEntity)
 	m_bRendering = false;
 }
 
-void CMaterials::RunLagRecords()
+bool CMaterials::ShouldRenderLagRecordsBase(C_TFPlayer* pPlayer)
 {
-	const auto pRenderContext = I::MaterialSystem->GetRenderContext();
-
-	if (!pRenderContext || !CFG::Materials_LagRecords_Active)
-		return;
-
 	const auto pLocal = H::Entities->GetLocal();
-
 	if (!pLocal)
-		return;
+		return false;
 
+	// Only render for enemy players
+	if (pPlayer->m_iTeamNum() == pLocal->m_iTeamNum())
+		return false;
+
+	if (pPlayer->deadflag())
+		return false;
+
+	// Check weapon type requirements
 	const auto pWeapon = H::Entities->GetWeapon();
-
 	if (!pWeapon)
-		return;
+		return false;
 
 	const auto weaponType = H::AimUtils->GetWeaponType(pWeapon);
 
 	if (weaponType == EWeaponType::HITSCAN)
 	{
-		if (!CFG::Aimbot_Active
-			|| !CFG::Aimbot_Hitscan_Active
-			|| !CFG::Aimbot_Target_Players
-			|| !CFG::Aimbot_Hitscan_Target_LagRecords)
-			return;
+		if (!CFG::Aimbot_Active || !CFG::Aimbot_Hitscan_Active
+			|| !CFG::Aimbot_Target_Players || !CFG::Aimbot_Hitscan_Target_LagRecords)
+			return false;
 	}
 	else if (weaponType == EWeaponType::MELEE)
 	{
-		if (!CFG::Aimbot_Active
-			|| !CFG::Aimbot_Melee_Active
-			|| !CFG::Aimbot_Target_Players
-			|| !CFG::Aimbot_Melee_Target_LagRecords)
-			return;
+		if (!CFG::Aimbot_Active || !CFG::Aimbot_Melee_Active
+			|| !CFG::Aimbot_Target_Players || !CFG::Aimbot_Melee_Target_LagRecords)
+			return false;
 	}
 	else
 	{
-		return;
+		return false;
 	}
 
-	// Get material based on setting
+	// Check if player has records
+	int nRecords = 0;
+	if (!F::LagRecords->HasRecords(pPlayer, &nRecords) || nRecords <= 0)
+		return false;
+
+	return true;
+}
+
+bool CMaterials::ShouldRenderLagRecords(C_TFPlayer* pPlayer)
+{
+	if (!CFG::Materials_LagRecords_Active)
+		return false;
+
+	if (!m_fnDrawModelExecute)
+		return false;
+
+	return ShouldRenderLagRecordsBase(pPlayer);
+}
+
+void CMaterials::RenderLagRecords(C_TFPlayer* pPlayer, const DrawModelState_t& state, ModelRenderInfo_t& pInfo)
+{
+	const auto pLocal = H::Entities->GetLocal();
+	if (!pLocal)
+		return;
+
+	int nRecords = 0;
+	if (!F::LagRecords->HasRecords(pPlayer, &nRecords) || nRecords <= 0)
+		return;
+
+	// Set up lag record material
+	m_bRenderingOriginalMat = CFG::Materials_LagRecords_Material == 0;
+
 	auto GetMaterial = [&](int nIndex) -> IMaterial* {
 		switch (nIndex)
 		{
@@ -354,10 +418,14 @@ void CMaterials::RunLagRecords()
 		}
 	};
 
-	m_bRenderingOriginalMat = CFG::Materials_LagRecords_Material == 0;
-
 	const auto pMaterial = GetMaterial(CFG::Materials_LagRecords_Material);
 	const auto& color = CFG::Color_LagRecord;
+
+	// Save current render state to restore after lag record rendering
+	const float flOriginalBlend = I::RenderView->GetBlend();
+	IMaterial* pOriginalMaterial = nullptr;
+	OverrideType_t originalOverrideType = OVERRIDE_NORMAL;
+	I::ModelRender->GetMaterialOverride(&pOriginalMaterial, &originalOverrideType);
 
 	if (pMaterial)
 	{
@@ -368,78 +436,49 @@ void CMaterials::RunLagRecords()
 			m_pGlowEnvmapTint->SetVecValue(ColorUtils::ToFloat(color.r), ColorUtils::ToFloat(color.g), ColorUtils::ToFloat(color.b));
 	}
 
-	if (CFG::Materials_Players_No_Depth)
+	const auto pRenderContext = I::MaterialSystem->GetRenderContext();
+	if (CFG::Materials_Players_No_Depth && pRenderContext)
 		pRenderContext->DepthRange(0.0f, 0.2f);
 
-	// Cache style and alpha for the loop
 	const int nStyle = CFG::Materials_LagRecords_Style;
 	const float flAlpha = CFG::Materials_LagRecords_Alpha;
 
-	for (const auto pEntity : H::Entities->GetGroup(EEntGroup::PLAYERS_ENEMIES))
+	if (nStyle == 0)
 	{
-		if (!pEntity)
-			continue;
-
-		const auto pPlayer = pEntity->As<C_TFPlayer>();
-
-		if (pPlayer->deadflag())
-			continue;
-
-		int nRecords = 0;
-
-		if (!F::LagRecords->HasRecords(pPlayer, &nRecords))
-			continue;
-
-		if (nRecords <= 0)
-			continue;
-
-		if (nStyle == 0)
+		// Draw all records with fading alpha
+		for (int n = 1; n < nRecords; n++)
 		{
-			for (int n = 1; n < nRecords; n++)
-			{
-				const auto pRecord = F::LagRecords->GetRecord(pPlayer, n, true);
-
-				if (!pRecord || !F::VisualUtils->IsOnScreenNoEntity(pLocal, pRecord->AbsOrigin) || !F::LagRecords->DiffersFromCurrent(pRecord))
-					continue;
-
-				I::RenderView->SetBlend(Math::RemapValClamped(static_cast<float>(n), 1.0f, static_cast<float>(nRecords), flAlpha, 0.01f));
-
-				F::LagRecordMatrixHelper->Set(pRecord);
-				m_bRendering = true;
-				const float flOldInvisibility = pPlayer->m_flInvisibility();
-				pPlayer->m_flInvisibility() = 0.0f;
-				pPlayer->DrawModel(STUDIO_RENDER | STUDIO_NOSHADOWS);
-				pPlayer->m_flInvisibility() = flOldInvisibility;
-				m_bRendering = false;
-				F::LagRecordMatrixHelper->Restore();
-			}
-		}
-		else
-		{
-			const auto pRecord = F::LagRecords->GetRecord(pPlayer, nRecords - 1, true);
+			const auto pRecord = F::LagRecords->GetRecord(pPlayer, n, true);
 
 			if (!pRecord || !F::VisualUtils->IsOnScreenNoEntity(pLocal, pRecord->AbsOrigin) || !F::LagRecords->DiffersFromCurrent(pRecord))
 				continue;
 
-			I::RenderView->SetBlend(flAlpha);
+			I::RenderView->SetBlend(Math::RemapValClamped(static_cast<float>(n), 1.0f, static_cast<float>(nRecords), flAlpha, 0.01f) * flOriginalBlend);
 
-			F::LagRecordMatrixHelper->Set(pRecord);
-			m_bRendering = true;
-			const float flOldInvisibility = pPlayer->m_flInvisibility();
-			pPlayer->m_flInvisibility() = 0.0f;
-			pPlayer->DrawModel(STUDIO_RENDER | STUDIO_NOSHADOWS);
-			pPlayer->m_flInvisibility() = flOldInvisibility;
-			m_bRendering = false;
-			F::LagRecordMatrixHelper->Restore();
+			// Call DrawModelExecute directly with the record's bones — no SetupBones recalculation
+			m_fnDrawModelExecute(I::ModelRender, state, pInfo, const_cast<matrix3x4_t*>(pRecord->BoneMatrix));
+		}
+	}
+	else
+	{
+		// Draw only the last record
+		const auto pRecord = F::LagRecords->GetRecord(pPlayer, nRecords - 1, true);
+
+		if (pRecord && F::VisualUtils->IsOnScreenNoEntity(pLocal, pRecord->AbsOrigin) && F::LagRecords->DiffersFromCurrent(pRecord))
+		{
+			I::RenderView->SetBlend(flAlpha * flOriginalBlend);
+			m_fnDrawModelExecute(I::ModelRender, state, pInfo, const_cast<matrix3x4_t*>(pRecord->BoneMatrix));
 		}
 	}
 
-	I::ModelRender->ForcedMaterialOverride(nullptr);
+	// Restore render state to what it was before lag record rendering
+	// (the player material override must persist for subsequent wearable draws)
+	I::ModelRender->ForcedMaterialOverride(pOriginalMaterial, originalOverrideType);
 
-	if (CFG::Materials_Players_No_Depth)
+	if (CFG::Materials_Players_No_Depth && pRenderContext)
 		pRenderContext->DepthRange(0.0f, 1.0f);
 
-	I::RenderView->SetBlend(1.0f);
+	I::RenderView->SetBlend(flOriginalBlend);
 	I::RenderView->SetColorModulation(1.0f, 1.0f, 1.0f);
 }
 
@@ -575,7 +614,6 @@ void CMaterials::Run()
 	if (m_pGlowSelfillumTint)
 		m_pGlowSelfillumTint->SetVecValue(0.03f, 0.03f, 0.03f);
 
-	RunLagRecords();
 	RunFakeAngle();
 
 	auto GetMaterial = [&](int nIndex) -> IMaterial* {
