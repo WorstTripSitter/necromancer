@@ -19,7 +19,7 @@ void CAimbot::RunMain(CUserCmd* pCmd)
 	// Handle switch key for head/body toggle
 	F::AimbotHitscan->HandleSwitchKey();
 
-	if (!CFG::Aimbot_Active || I::EngineVGui->IsGameUIVisible() || I::MatSystemSurface->IsCursorVisible() || SDKUtils::BInEndOfMatch())
+	if (!CFG::Aimbot_Active || SDKUtils::BInEndOfMatch())
 		return;
 
 	if (Shifting::bRecharging)
