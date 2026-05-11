@@ -29,7 +29,7 @@ void CAimbot::RunMain(CUserCmd* pCmd)
 	// This is critical for DT to work properly, the reference project does the same
 	if (Shifting::bShifting && !Shifting::bShiftingWarp)
 		return;
-	
+
 	// Skip aimbot when AutoFaN is running (it needs to control viewangles for the jump boost)
 	if (F::Misc->IsAutoFaNRunning())
 		return;

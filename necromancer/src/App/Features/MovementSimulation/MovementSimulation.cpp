@@ -174,12 +174,17 @@ void CMovementSimulation::Store()
 		C_TFPlayer* pPlayer = pEntity ? pEntity->As<C_TFPlayer>() : nullptr;
 		auto& vRecords = m_mRecords[n];
 
-		if (!IsUsablePlayer(pPlayer) || pPlayer == pLocal || pPlayer->m_vecVelocity().To2D().IsZero())
+		if (!IsUsablePlayer(pPlayer) || pPlayer == pLocal)
 		{
 			vRecords.clear();
 			m_mSimTimes[n].clear();
 			continue;
 		}
+
+		// Don't store new records for stationary enemies, but keep existing ones
+		// — they might start moving next frame and we need their direction history
+		if (pPlayer->m_vecVelocity().Length2D() < 10.0f)
+			continue;
 
 		const float flSimTime = pPlayer->m_flSimulationTime();
 		if (!vRecords.empty() && std::fabs(vRecords.front().m_flSimTime - flSimTime) <= 0.0001f)
@@ -242,6 +247,15 @@ bool CMovementSimulation::Initialize(C_TFPlayer* pPlayer, MoveStorage& tMoveStor
 		tMoveStorage.m_bFailed = true;
 		tMoveStorage.m_bInitFailed = true;
 		return false;
+	}
+
+	// Stationary enemies (speed < 10 HU/s) are handled by the caller — Initialize() still
+	// succeeds so GetOrigin()/Restore()/splash/multipoint/lob all work. The caller skips
+	// RunTick() for stationary enemies since their position doesn't change.
+	// We still track whether the player is stationary so callers can check.
+	{
+		C_TFPlayer* pLocal = H::Entities ? H::Entities->GetLocal() : nullptr;
+		tMoveStorage.m_bStationary = (pPlayer != pLocal && pPlayer->m_vecVelocity().Length2D() < 10.0f);
 	}
 
 	g_flOldFrametime = I::GlobalVars->frametime;

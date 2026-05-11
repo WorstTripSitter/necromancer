@@ -34,6 +34,37 @@ bool CAimUtils::TraceEntityBullet(C_BaseEntity *pEntity, const Vec3 &vFrom, cons
 	return false;
 }
 
+bool CAimUtils::TraceEntityBulletDirect(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo, int *pHitHitboxOut)
+{
+	// Bypasses the spatial partition which can be stale during EnginePrediction.
+	// ClipRayToEntity tests the ray directly against the entity's hitboxes.
+	// We also need a world-only trace to check for walls blocking the shot.
+
+	Ray_t ray = {};
+	ray.Init(vFrom, vTo);
+
+	// Step 1: ClipRayToEntity — directly test hitboxes, bypasses spatial partition
+	trace_t clipTrace = {};
+	I::EngineTrace->ClipRayToEntity(ray, (MASK_SHOT | CONTENTS_GRATE), pEntity, &clipTrace);
+
+	if (clipTrace.fraction >= 1.0f || clipTrace.allsolid || clipTrace.startsolid)
+		return false;
+
+	// Step 2: World-only trace — check if a wall blocks the shot before the entity
+	trace_t worldTrace = {};
+	CTraceFilterWorldOnly worldFilter = {};
+	I::EngineTrace->TraceRay(ray, (MASK_SHOT | CONTENTS_GRATE), &worldFilter, &worldTrace);
+
+	// If a wall is closer than the entity hit, the shot is blocked
+	if (worldTrace.fraction < clipTrace.fraction)
+		return false;
+
+	if (pHitHitboxOut)
+		*pHitHitboxOut = clipTrace.hitbox;
+
+	return true;
+}
+
 bool CAimUtils::TraceEntityAutoDet(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo)
 {
 	trace_t trace = {};
@@ -89,6 +120,51 @@ bool CAimUtils::TraceEntityMelee(C_BaseEntity *pEntity, const Vec3 &vFrom, const
 	TraceHull(vFrom, vTo, { -18.0f, -18.0f, -18.0f }, { 18.0f, 18.0f, 18.0f }, MASK_SOLID, &Filter, &Trace);
 
 	return Trace.m_pEnt == pEntity;
+}
+
+bool CAimUtils::TraceEntityMeleeDirect(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo)
+{
+	return TraceEntityMeleeDirect(pEntity, vFrom, vTo, { -18.0f, -18.0f, -18.0f }, { 18.0f, 18.0f, 18.0f });
+}
+
+bool CAimUtils::TraceEntityMeleeDirect(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo, const Vec3 &vMins, const Vec3 &vMaxs)
+{
+	// Bypasses the spatial partition which can be stale during EnginePrediction.
+	// Matches server's DoSwingTraceInternal: point trace first, then hull trace if point misses.
+
+	// Step 1a: Point trace via ClipRayToEntity
+	Ray_t pointRay = {};
+	pointRay.Init(vFrom, vTo);
+	trace_t pointTrace = {};
+	I::EngineTrace->ClipRayToEntity(pointRay, MASK_SOLID, pEntity, &pointTrace);
+
+	bool bHit = (pointTrace.fraction < 1.0f && !pointTrace.allsolid && !pointTrace.startsolid);
+
+	// Step 1b: Hull trace via ClipRayToEntity (only if point missed)
+	if (!bHit)
+	{
+		Ray_t hullRay = {};
+		hullRay.Init(vFrom, vTo, vMins, vMaxs);
+		trace_t hullTrace = {};
+		I::EngineTrace->ClipRayToEntity(hullRay, MASK_SOLID, pEntity, &hullTrace);
+		bHit = (hullTrace.fraction < 1.0f && !hullTrace.allsolid && !hullTrace.startsolid);
+	}
+
+	if (!bHit)
+		return false;
+
+	// Step 2: World-only trace — check if a wall blocks the swing before the entity
+	Ray_t worldRay = {};
+	worldRay.Init(vFrom, vTo, vMins, vMaxs);
+	trace_t worldTrace = {};
+	CTraceFilterWorldOnly worldFilter = {};
+	I::EngineTrace->TraceRay(worldRay, MASK_SOLID, &worldFilter, &worldTrace);
+
+	// If a wall is closer than the entity hit, the swing is blocked
+	if (worldTrace.fraction < 0.99f)
+		return false;
+
+	return true;
 }
 
 bool CAimUtils::TracePositionWorld(const Vec3 &vFrom, const Vec3 &vTo)

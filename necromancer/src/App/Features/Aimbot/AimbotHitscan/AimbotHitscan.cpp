@@ -125,7 +125,7 @@ bool CAimbotHitscan::ScanHead(C_TFPlayer* pLocal, const CUserCmd* pCmd, HitscanT
 
 		int nHitHitbox = -1;
 
-		if (!H::AimUtils->TraceEntityBullet(pPlayer, vLocalPos, vTransformed, &nHitHitbox))
+		if (!H::AimUtils->TraceEntityBulletDirect(pPlayer, vLocalPos, vTransformed, &nHitHitbox))
 			continue;
 
 		if (nHitHitbox != HITBOX_HEAD)
@@ -173,7 +173,7 @@ bool CAimbotHitscan::ScanBody(C_TFPlayer* pLocal, const CUserCmd* pCmd, HitscanT
 
 		Vec3 vHitbox = pPlayer->GetHitboxPos(n);
 
-		if (!H::AimUtils->TraceEntityBullet(pPlayer, vLocalPos, vHitbox))
+		if (!H::AimUtils->TraceEntityBulletDirect(pPlayer, vLocalPos, vHitbox))
 			continue;
 
 		target.Position = vHitbox;
@@ -202,7 +202,7 @@ bool CAimbotHitscan::ScanBuilding(C_TFPlayer* pLocal, const CUserCmd* pCmd, Hits
 		{
 			Vec3 vHitbox = pObject->GetHitboxPos(n);
 
-			if (!H::AimUtils->TraceEntityBullet(pObject, vLocalPos, vHitbox))
+			if (!H::AimUtils->TraceEntityBulletDirect(pObject, vLocalPos, vHitbox))
 				continue;
 
 			target.Position = vHitbox;
@@ -232,7 +232,7 @@ bool CAimbotHitscan::ScanBuilding(C_TFPlayer* pLocal, const CUserCmd* pCmd, Hits
 			Vec3 vTransformed = {};
 			Math::VectorTransform(vPoint, transform, vTransformed);
 
-			if (!H::AimUtils->TraceEntityBullet(pObject, vLocalPos, vTransformed))
+			if (!H::AimUtils->TraceEntityBulletDirect(pObject, vLocalPos, vTransformed))
 				continue;
 
 			target.Position = vTransformed;
@@ -338,6 +338,11 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 						const float flCurrentAge = I::GlobalVars->curtime - pPlayer->m_flSimulationTime();
 						if (F::LagRecords->IsRecordAgeValidForServer(flCurrentAge))
 						{
+							// Force fresh bone setup — the cache may be stale after LagRecords
+							// invalidated it during record collection. Without this, GetHitboxPos
+							// returns positions from the previous frame's bone matrix, which can
+							// be 50+ HU off from the player's actual position.
+							pPlayer->InvalidateBoneCache();
 							Vec3 vPos = pPlayer->GetHitboxPos(nAimHitbox);
 							Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
 							const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
@@ -458,6 +463,7 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 				// Fallback: no lag records exist at all, target real model (only without fake latency)
 				if (candidates.empty() && F::LagRecords->GetFakeLatency() <= 0.0f)
 				{
+					pPlayer->InvalidateBoneCache();
 					Vec3 vPos = pPlayer->GetHitboxPos(nAimHitbox);
 					Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
 					const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
@@ -510,6 +516,7 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 				if (F::LagRecords->GetFakeLatency() > 0.0f)
 					continue;
 
+				pPlayer->InvalidateBoneCache();
 				Vec3 vPos = pPlayer->GetHitboxPos(nAimHitbox);
 				Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
 				const float flFOVTo = CFG::Aimbot_Hitscan_Sort == 0 ? Math::CalcFov(vLocalAngles, vAngleTo) : 0.0f;
@@ -607,11 +614,13 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 		{
 			case ETFClassIds::CTFPlayer:
 			{
+				const int nPlayerIdx = target.Entity->entindex();
+
 				if (!target.LagRecord)
 				{
 					int nHitHitbox = -1;
 
-					if (!H::AimUtils->TraceEntityBullet(target.Entity, vLocalPos, target.Position, &nHitHitbox))
+					if (!H::AimUtils->TraceEntityBulletDirect(target.Entity, vLocalPos, target.Position, &nHitHitbox))
 					{
 						if (target.AimedHitbox == HITBOX_HEAD)
 						{
@@ -626,9 +635,7 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 						}
 
 						else
-						{
 							continue;
-						}
 					}
 
 					else
@@ -643,7 +650,7 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 					F::LagRecordMatrixHelper->Set(target.LagRecord);
 
 					int nHitHitbox = -1;
-					const bool bTraceResult = H::AimUtils->TraceEntityBullet(target.Entity, vLocalPos, target.Position, &nHitHitbox);
+					const bool bTraceResult = H::AimUtils->TraceEntityBulletDirect(target.Entity, vLocalPos, target.Position, &nHitHitbox);
 
 					F::LagRecordMatrixHelper->Restore();
 
@@ -662,7 +669,7 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 			case ETFClassIds::CObjectDispenser:
 			case ETFClassIds::CObjectTeleporter:
 			{
-				if (!H::AimUtils->TraceEntityBullet(target.Entity, vLocalPos, target.Position))
+				if (!H::AimUtils->TraceEntityBulletDirect(target.Entity, vLocalPos, target.Position))
 				{
 					if (!ScanBuilding(pLocal, pCmd, target))
 						continue;
@@ -673,7 +680,7 @@ bool CAimbotHitscan::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, cons
 
 			case ETFClassIds::CTFGrenadePipebombProjectile:
 			{
-				if (!H::AimUtils->TraceEntityBullet(target.Entity, vLocalPos, target.Position))
+				if (!H::AimUtils->TraceEntityBulletDirect(target.Entity, vLocalPos, target.Position))
 				{
 					continue;
 				}
@@ -984,7 +991,7 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 			{
 				int nHitHitbox = -1;
 
-				if (!H::AimUtils->TraceEntityBullet(pPlayer, vTraceStart, vTraceEnd, &nHitHitbox))
+				if (!H::AimUtils->TraceEntityBulletDirect(pPlayer, vTraceStart, vTraceEnd, &nHitHitbox))
 					return false;
 
 				if (nHitHitbox != HITBOX_HEAD)
@@ -1053,7 +1060,7 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 			{
 				int nHitHitbox = -1;
 
-				if (!H::AimUtils->TraceEntityBullet(pPlayer, vTraceStart, vTraceEnd, &nHitHitbox))
+				if (!H::AimUtils->TraceEntityBulletDirect(pPlayer, vTraceStart, vTraceEnd, &nHitHitbox))
 					return false;
 
 				// For both triggerbot and smooth autoshoot: if aiming for head, require head hit
@@ -1083,7 +1090,7 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 
 				int nHitHitbox = -1;
 
-				if (!H::AimUtils->TraceEntityBullet(pPlayer, vTraceStart, vTraceEnd, &nHitHitbox))
+				if (!H::AimUtils->TraceEntityBulletDirect(pPlayer, vTraceStart, vTraceEnd, &nHitHitbox))
 				{
 					F::LagRecordMatrixHelper->Restore();
 					return false;
@@ -1120,7 +1127,7 @@ bool CAimbotHitscan::ShouldFire(const CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWe
 
 		else
 		{
-			if (!H::AimUtils->TraceEntityBullet(target.Entity, vTraceStart, vTraceEnd, nullptr))
+			if (!H::AimUtils->TraceEntityBulletDirect(target.Entity, vTraceStart, vTraceEnd, nullptr))
 			{
 				return false;
 			}

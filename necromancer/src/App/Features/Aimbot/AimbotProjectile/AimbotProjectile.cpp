@@ -985,6 +985,11 @@ bool CAimbotProjectile::SolveTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon,
 		if (!F::MovementSimulation->Initialize(pPlayer))
 			return false;
 
+		// Stationary enemies: skip RunTick() — their position doesn't change,
+		// so GetOrigin() always returns their current position. This lets the
+		// full logic (splash, multipoint, lob, path drawing) still work.
+		const bool bStationary = F::MovementSimulation->IsStationary();
+
 		// Pre-calculate splash radius (weapon doesn't change between ticks)
 		float flSplashRadius = 0.0f;
 		{
@@ -1104,7 +1109,11 @@ bool CAimbotProjectile::SolveTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon,
 		{
 			m_TargetPath.push_back(F::MovementSimulation->GetOrigin());
 
-			F::MovementSimulation->RunTick();
+			// Skip RunTick() for stationary enemies — their position doesn't change,
+			// so GetOrigin() always returns their current position. Running ticks
+			// for them is wasted CPU and would produce identical positions anyway.
+			if (!bStationary)
+				F::MovementSimulation->RunTick();
 
 			Vec3 vTarget = F::MovementSimulation->GetOrigin();
 
@@ -1203,9 +1212,12 @@ bool CAimbotProjectile::SolveTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon,
 			// Re-initialize movement sim so we can iterate predicted positions with lob angles
 			if (F::MovementSimulation->Initialize(pPlayer))
 			{
+				const bool bLobStationary = F::MovementSimulation->IsStationary();
+
 				for (int nTick = 0; nTick < nMaxSimTicks; nTick++)
 				{
-					F::MovementSimulation->RunTick();
+					if (!bLobStationary)
+						F::MovementSimulation->RunTick();
 
 					Vec3 vLobTarget = F::MovementSimulation->GetOrigin();
 					OffsetPlayerPosition(pWeapon, vLobTarget, pPlayer, bDucked, bOnGround, vLocalPos);

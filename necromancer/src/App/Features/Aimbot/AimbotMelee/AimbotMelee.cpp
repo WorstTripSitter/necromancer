@@ -67,7 +67,7 @@ bool CAimbotMelee::CanHit(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeTarg
 	// Get weapon-specific range and hull size - matching server's DoSwingTraceInternal
 	float flRange = SDKUtils::AttribHookValue(pWeapon->GetSwingRange(), "melee_range_multiplier", pWeapon);
 	float flHull = SDKUtils::AttribHookValue(18.0f, "melee_bounds_multiplier", pWeapon);
-	
+
 	// Account for player model scale (server does this too)
 	if (pLocal->m_flModelScale() > 1.0f)
 	{
@@ -85,8 +85,6 @@ bool CAimbotMelee::CanHit(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeTarg
 	Vec3 vSwingMins = { -flHull, -flHull, -flHull };
 	Vec3 vSwingMaxs = { flHull, flHull, flHull };
 
-	// Server uses Weapon_ShootPosition() which is the same as GetShootPos()
-	// Predict duck state for airborne instant-duck (CrouchWhileAirborne)
 	const Vec3 vEyePos = SDK::GetPredictedShootPos(pLocal);
 	const bool bIsPlayer = target.Entity && H::Entities->IsEntityValid(target.Entity) && target.Entity->GetClassId() == ETFClassIds::CTFPlayer;
 
@@ -110,21 +108,8 @@ bool CAimbotMelee::CanHit(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeTarg
 		Math::AngleVectors(target.AngleTo, &vForward);
 		Vec3 vTraceEnd = vEyePos + (vForward * flRange);
 
-		// Server's DoSwingTraceInternal: TraceLine FIRST, then TraceHull if TraceLine misses
-		trace_t trace = {};
-		CTraceFilterHitscan filter = {};
-		filter.m_pIgnore = pLocal;
-		
-		// First try: point trace (server's UTIL_TraceLine)
-		H::AimUtils->TraceHull(vEyePos, vTraceEnd, {}, {}, MASK_SOLID, &filter, &trace);
-		bool bHit = trace.m_pEnt && trace.m_pEnt == target.Entity;
-		
-		// Second try: hull trace (server's UTIL_TraceHull - only if TraceLine missed)
-		if (!bHit)
-		{
-			H::AimUtils->TraceHull(vEyePos, vTraceEnd, vSwingMins, vSwingMaxs, MASK_SOLID, &filter, &trace);
-			bHit = trace.m_pEnt && trace.m_pEnt == target.Entity;
-		}
+		// Use ClipRayToEntity to bypass stale spatial partition
+		bool bHit = H::AimUtils->TraceEntityMeleeDirect(target.Entity, vEyePos, vTraceEnd, vSwingMins, vSwingMaxs);
 
 		F::LagRecordMatrixHelper->Restore();
 
@@ -140,8 +125,8 @@ bool CAimbotMelee::CanHit(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeTarg
 			Vec3 vCurrentForward;
 			Math::AngleVectors(I::EngineClient->GetViewAngles(), &vCurrentForward);
 			Vec3 vCurrentTraceEnd = vEyePos + (vCurrentForward * flRange);
-			
-			target.MeleeTraceHit = H::AimUtils->TraceEntityMelee(target.Entity, vEyePos, vCurrentTraceEnd);
+
+			target.MeleeTraceHit = H::AimUtils->TraceEntityMeleeDirect(target.Entity, vEyePos, vCurrentTraceEnd, vSwingMins, vSwingMaxs);
 			return target.MeleeTraceHit;
 		}
 
@@ -150,26 +135,13 @@ bool CAimbotMelee::CanHit(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeTarg
 
 	// For non-backtrack targets (buildings, current position fallback)
 	target.AngleTo = Math::CalcAngle(vEyePos, target.Position);
-	
+
 	Vec3 vForward;
 	Math::AngleVectors(target.AngleTo, &vForward);
 	Vec3 vTraceEnd = vEyePos + (vForward * flRange);
 
-	// Server's DoSwingTraceInternal: TraceLine first, then TraceHull
-	trace_t trace = {};
-	CTraceFilterHitscan filter = {};
-	filter.m_pIgnore = pLocal;
-
-	// First try: point trace
-	H::AimUtils->TraceHull(vEyePos, vTraceEnd, {}, {}, MASK_SOLID, &filter, &trace);
-	bool bHit = trace.m_pEnt && trace.m_pEnt == target.Entity;
-
-	// Second try: hull trace
-	if (!bHit)
-	{
-		H::AimUtils->TraceHull(vEyePos, vTraceEnd, vSwingMins, vSwingMaxs, MASK_SOLID, &filter, &trace);
-		bHit = trace.m_pEnt && trace.m_pEnt == target.Entity;
-	}
+	// Use ClipRayToEntity to bypass stale spatial partition
+	bool bHit = H::AimUtils->TraceEntityMeleeDirect(target.Entity, vEyePos, vTraceEnd, vSwingMins, vSwingMaxs);
 
 	if (bHit)
 	{
@@ -183,8 +155,8 @@ bool CAimbotMelee::CanHit(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeTarg
 		Vec3 vCurrentForward;
 		Math::AngleVectors(I::EngineClient->GetViewAngles(), &vCurrentForward);
 		Vec3 vCurrentTraceEnd = vEyePos + (vCurrentForward * flRange);
-		
-		target.MeleeTraceHit = H::AimUtils->TraceEntityMelee(target.Entity, vEyePos, vCurrentTraceEnd);
+
+		target.MeleeTraceHit = H::AimUtils->TraceEntityMeleeDirect(target.Entity, vEyePos, vCurrentTraceEnd, vSwingMins, vSwingMaxs);
 		return target.MeleeTraceHit;
 	}
 
@@ -314,8 +286,7 @@ bool CAimbotMelee::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeT
 						if (interpRecord.bIsAlive && interpRecord.Player == pPlayer)
 						{
 							const float flInterpAge = I::GlobalVars->curtime - interpRecord.SimulationTime;
-							const float flAgeAtSmack = flInterpAge + flSmackDelay;
-							if (F::LagRecords->IsRecordAgeValidForServer(flInterpAge) && flAgeAtSmack <= F::LagRecords->GetMaxUnlag() - 0.1f)
+							if (F::LagRecords->IsRecordAgeValidForServer(flInterpAge) && flInterpAge <= F::LagRecords->GetMaxUnlag())
 							{
 								// Store interpolated record as a static so CanHit can use it
 								static LagRecord_t s_interpRecord = {};
@@ -367,16 +338,15 @@ bool CAimbotMelee::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeT
 						if (!pRecord->bIsAlive)
 							continue;
 
-						if (!F::LagRecords->DiffersFromCurrent(pRecord))
+						if (!bFakeLatencyActive && !F::LagRecords->DiffersFromCurrent(pRecord))
 							continue;
 
 						const float flRecordAge = I::GlobalVars->curtime - pRecord->SimulationTime;
-						const float flAgeAtSmack = flRecordAge + flSmackDelay;
-						if (flAgeAtSmack > F::LagRecords->GetMaxUnlag() - 0.1f)
+						if (flRecordAge > F::LagRecords->GetMaxUnlag())
 							continue;
 
 						const float flAgeDelta = fabsf(flRecordAge - flIdealAge);
-						if (flAgeDelta > flAgeTolerance + 0.05f)
+						if (!bFakeLatencyActive && flAgeDelta > flAgeTolerance + 0.05f)
 							continue;
 
 						if (n > 0)
@@ -417,9 +387,10 @@ bool CAimbotMelee::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeT
 					}
 				}
 
-				// Fallback: if no valid targets were added (no lag records exist at all and STEP 1 didn't add current model)
-				// Only target real model when fake latency is off — STEP 1 already handles this when HasRecords is true
-				if (!bHasValidLagRecords && !bFakeLatencyActive)
+				// Fallback: if no valid targets were added, try the real model position.
+				// Even with fake latency, the real model is still worth targeting — CanHit
+				// will verify if the trace actually hits, and the server may accept it.
+				if (!bHasValidLagRecords)
 				{
 					Vec3 vPos = pPlayer->GetHitboxPos(HITBOX_BODY);
 					Vec3 vAngleTo = Math::CalcAngle(vLocalPos, vPos);
@@ -535,7 +506,7 @@ bool CAimbotMelee::GetTarget(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, MeleeT
 		outTarget = target;
 		return true;
 	}
-	
+
 	// If no main target found, check friendly buildings (bypasses target max limit)
 	for (auto& target : vecFriendlyBuildings)
 	{

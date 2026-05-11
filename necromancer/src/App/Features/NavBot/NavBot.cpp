@@ -3720,8 +3720,11 @@ void CNavBot::AutoScope(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 				continue;
 			}
 
-			for (int i = 0; i < iMaxTicks; i++)
-				F::MovementSimulation->RunTick();
+			if (!F::MovementSimulation->IsStationary())
+			{
+				for (int i = 0; i < iMaxTicks; i++)
+					F::MovementSimulation->RunTick();
+			}
 		}
 
 		bool bResult = false;

@@ -137,9 +137,12 @@ Vec3 CAimbotWrangler::PredictTargetPosition(C_TFPlayer* pTarget, float flTime)
 		return pTarget->GetAbsOrigin();
 	
 	int nTicks = TIME_TO_TICKS(flTime);
-	for (int i = 0; i < nTicks; i++)
+	if (!F::MovementSimulation->IsStationary())
 	{
-		F::MovementSimulation->RunTick();
+		for (int i = 0; i < nTicks; i++)
+		{
+			F::MovementSimulation->RunTick();
+		}
 	}
 	
 	Vec3 vPredicted = F::MovementSimulation->GetOrigin();

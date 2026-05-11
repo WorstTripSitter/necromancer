@@ -44,6 +44,7 @@ struct MoveStorage
 
 	bool m_bFailed = false;
 	bool m_bInitFailed = false;
+	bool m_bStationary = false;
 };
 
 class CMovementSimulation
@@ -63,6 +64,7 @@ public:
 	inline const Vec3& GetOrigin() const { return m_CurrentStorage.m_MoveData.m_vecAbsOrigin; }
 	inline const Vec3& GetVelocity() const { return m_CurrentStorage.m_MoveData.m_vecVelocity; }
 	inline bool HasFailed() const { return m_CurrentStorage.m_bFailed || m_CurrentStorage.m_bInitFailed; }
+	inline bool IsStationary() const { return m_CurrentStorage.m_bStationary; }
 
 	void ClearRecords();
 	float GetPredictedDelta(C_TFPlayer* pPlayer);

@@ -868,6 +868,7 @@ int CAmalgamAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWe
 	// Use SEOwnedDE's movement simulation
 	bool bIsPlayer = tTarget.m_iTargetType == TargetEnum::Player && IsPlayer(tTarget.m_pEntity);
 	bool bMoveSim = bIsPlayer && F::MovementSimulation->Initialize(tTarget.m_pEntity->As<CTFPlayer>());
+	bool bStationary = bMoveSim && F::MovementSimulation->IsStationary();
 	
 	std::vector<Vec3> vPlayerPath;
 	
@@ -942,7 +943,8 @@ int CAmalgamAimbotProjectile::CanHit(Target_t& tTarget, CTFPlayer* pLocal, CTFWe
 		if (bMoveSim)
 		{
 			vPlayerPath.push_back(F::MovementSimulation->GetOrigin());
-			F::MovementSimulation->RunTick();
+			if (!bStationary)
+				F::MovementSimulation->RunTick();
 			tTarget.m_vPos = F::MovementSimulation->GetOrigin();
 		}
 		if (i < 0)

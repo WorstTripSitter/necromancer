@@ -18,11 +18,14 @@ public:
 	void Trace(const Vec3 &start, const Vec3 &end, unsigned int mask, CTraceFilter *filter, trace_t *trace);
 	void TraceHull(const Vec3 &start, const Vec3 &end, const Vec3 &mins, const Vec3 &maxs, unsigned int mask, CTraceFilter *filter, trace_t *trace);
 	bool TraceEntityBullet(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo, int *pHitHitboxOut = nullptr);
+	bool TraceEntityBulletDirect(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo, int *pHitHitboxOut = nullptr);
 	bool TraceEntityAutoDet(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo);
 	bool TraceProjectile(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo);
 	bool TraceProjectilePipes(const Vec3 &vFrom, const Vec3 &vTo, C_BaseEntity *pTarget, bool *pHitTarget);
 	bool TraceFlames(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo);
 	bool TraceEntityMelee(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo);
+	bool TraceEntityMeleeDirect(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo);
+	bool TraceEntityMeleeDirect(C_BaseEntity *pEntity, const Vec3 &vFrom, const Vec3 &vTo, const Vec3 &vMins, const Vec3 &vMaxs);
 	bool TracePositionWorld(const Vec3 &vFrom, const Vec3 &vTo);
 	EWeaponType GetWeaponType(C_TFWeaponBase *pWeapon);
 	void FixMovement(CUserCmd *pCmd, const Vec3 &vTargetAngle);

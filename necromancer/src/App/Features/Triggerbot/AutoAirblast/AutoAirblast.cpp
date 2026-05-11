@@ -634,9 +634,11 @@ static bool SolveIntercept(C_TFPlayer* pLocal, C_TFPlayer* pTarget, const Vec3& 
 	
 	// Build player path by running simulation
 	outPlayerPath.push_back(pTarget->GetAbsOrigin());
+	const bool bStationary = F::MovementSimulation->IsStationary();
 	for (int t = 0; t < nSimTicks; t++)
 	{
-		F::MovementSimulation->RunTick();
+		if (!bStationary)
+			F::MovementSimulation->RunTick();
 		outPlayerPath.push_back(F::MovementSimulation->GetOrigin());
 	}
 	F::MovementSimulation->Restore();
@@ -1078,9 +1080,11 @@ static bool SolveInterceptArc(C_TFPlayer* pLocal, C_TFPlayer* pTarget, const Vec
 	nSimTicks = std::clamp(nSimTicks, 10, TIME_TO_TICKS(2.0f));
 	
 	outPlayerPath.push_back(pTarget->GetAbsOrigin());
+	const bool bStationary2 = F::MovementSimulation->IsStationary();
 	for (int t = 0; t < nSimTicks; t++)
 	{
-		F::MovementSimulation->RunTick();
+		if (!bStationary2)
+			F::MovementSimulation->RunTick();
 		outPlayerPath.push_back(F::MovementSimulation->GetOrigin());
 	}
 	F::MovementSimulation->Restore();
