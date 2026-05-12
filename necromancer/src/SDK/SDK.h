@@ -502,21 +502,40 @@ namespace Shifting
 
 	// Tick tracking for high ping compensation
 	// Tracks server tick acknowledgments to predict optimal shift timing
-	inline int nLastServerTick = 0;           // Last acknowledged server tick
+	inline int nLastServerTick = 0;           // Last acknowledged server tick (m_nDeltaTick)
 	inline int nLastCommandAck = 0;           // Last acknowledged command number
 	inline int nTicksAhead = 0;               // How many ticks we're ahead of server
-	inline float flLastLatency = 0.0f;        // Last measured latency
+	inline float flLastLatency = 0.0f;        // Last measured latency (seconds)
 	inline int nPredictedServerTick = 0;      // Our prediction of current server tick
+	inline int nLastOutgoingCommand = 0;      // Last outgoing command when we checked
+	inline int nShiftsSent = 0;               // Total shift commands sent since last ack
 
-	// Deficit tracking (from Amalgam)
-	// When we send more commands than the server can process, it rejects some.
-	// This tracks the deficit so we can compensate by reducing available ticks.
-	inline int nDeficit = 0;                  // Commands rejected by server
-	inline int nMaxUsrCmdProcessTicks = 24;   // sv_maxusrcmdprocessticks value
+	// Deficit tracking
+	// The server has sv_maxusrcmdprocessticks (default 24 on casual, varies on community).
+	// When we send more commands in one batch than the server can process, it drops the
+	// excess. We detect this by comparing: how many commands we sent vs how many the
+	// server actually acked. The difference is the deficit.
+	inline int nDeficit = 0;                  // Estimated commands rejected by server
+	inline int nMaxUsrCmdProcessTicks = 24;   // sv_maxusrcmdprocessticks value (cached)
+	inline int nLastAckedCommandCount = 0;    // Commands acked in last server update
+	inline int nCommandsSentSinceAck = 0;    // Commands sent since last server ack
 
 	// Update tick tracking - call this every frame
 	inline void UpdateTickTracking(int nServerTick, int nCommandAck, float flLatency)
 	{
+		// Detect deficit: if server acked fewer commands than we sent, the gap is deficit
+		if (nCommandAck != nLastCommandAck && nCommandsSentSinceAck > 0)
+		{
+			int nAckedCount = nCommandAck - nLastCommandAck;
+			if (nAckedCount < nCommandsSentSinceAck)
+			{
+				// Server dropped some of our commands
+				int nDropped = nCommandsSentSinceAck - nAckedCount;
+				nDeficit += nDropped;
+			}
+			nCommandsSentSinceAck = 0;
+		}
+
 		// Track how many ticks ahead we are
 		if (nServerTick > nLastServerTick)
 		{
@@ -531,6 +550,17 @@ namespace Shifting
 		// Server tick = our tick - (latency in ticks)
 		int nLatencyTicks = static_cast<int>(flLatency / TICK_INTERVAL);
 		nPredictedServerTick = I::GlobalVars->tickcount - nLatencyTicks;
+
+		// Cache sv_maxusrcmdprocessticks for deficit calculations
+		static auto sv_maxusrcmdprocessticks = I::CVar->FindVar("sv_maxusrcmdprocessticks");
+		if (sv_maxusrcmdprocessticks)
+			nMaxUsrCmdProcessTicks = sv_maxusrcmdprocessticks->GetInt();
+	}
+
+	// Called when we send commands (shift or normal) to track how many went out
+	inline void OnCommandsSent(int nCount)
+	{
+		nCommandsSentSinceAck += nCount;
 	}
 
 	// Check if we should delay shift based on tick tracking
@@ -541,12 +571,18 @@ namespace Shifting
 		if (nTickTrackingMode == 0)
 			return false;
 		
-		// Mode 1 = Linear - simple latency-based delay
+		// Mode 1 = Adaptive - latency + deficit aware
 		if (nTickTrackingMode == 1)
 		{
+			// If we have a deficit, always wait — server is already dropping commands
+			if (nDeficit > 0)
+				return true;
+
 			// If we're too far ahead of server, wait
 			// This prevents commands from arriving too bunched up
-			int nMaxAhead = static_cast<int>(flLastLatency / TICK_INTERVAL) + 2;
+			// The threshold scales with latency: higher ping = more tolerance
+			int nLatencyTicks = static_cast<int>(flLastLatency / TICK_INTERVAL);
+			int nMaxAhead = nLatencyTicks + 3;
 			return nTicksAhead > nMaxAhead;
 		}
 		
@@ -577,9 +613,13 @@ namespace Shifting
 		nTicksAhead = 0;
 		flLastLatency = 0.0f;
 		nPredictedServerTick = 0;
+		nLastOutgoingCommand = 0;
+		nShiftsSent = 0;
 		// Reset deficit tracking
 		nDeficit = 0;
 		nMaxUsrCmdProcessTicks = 24;
+		nLastAckedCommandCount = 0;
+		nCommandsSentSinceAck = 0;
 	}
 }
 

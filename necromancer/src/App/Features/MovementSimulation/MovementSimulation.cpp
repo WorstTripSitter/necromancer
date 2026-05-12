@@ -11,6 +11,9 @@ namespace
 	constexpr size_t MaxMoveRecords = 66;
 	constexpr size_t MaxSimTimeRecords = 8;
 	constexpr float PlayerOriginCompression = 0.125f;
+	constexpr float MicroMoveDistanceSqr = (PlayerOriginCompression * 2.f) * (PlayerOriginCompression * 2.f);
+	constexpr float StationarySpeed = 10.f;
+	constexpr size_t StationarySamples = 4;
 	constexpr float TeleportDistanceSqr = 4096.f * 4096.f;
 	constexpr int MaxChokedTicks = 22;
 
@@ -72,6 +75,30 @@ namespace
 		return pPlayer && !pPlayer->IsDormant() && pPlayer->IsAlive() && !IsAGhost(pPlayer);
 	}
 
+	bool HasMeaningfulOriginDelta(const Vec3& vFrom, const Vec3& vTo)
+	{
+		return (vFrom - vTo).Length2DSqr() > MicroMoveDistanceSqr;
+	}
+
+	bool IsRecentlyStationary(C_TFPlayer* pPlayer, const std::deque<MoveRecord>& vRecords)
+	{
+		if (!pPlayer || pPlayer->m_vecVelocity().Length2D() >= StationarySpeed)
+			return false;
+
+		if (vRecords.empty())
+			return true;
+
+		const Vec3 vOrigin = pPlayer->m_vecOrigin();
+		const size_t nSamples = std::min(vRecords.size(), StationarySamples);
+		for (size_t n = 0; n < nSamples; ++n)
+		{
+			if (HasMeaningfulOriginDelta(vOrigin, vRecords[n].m_vOrigin))
+				return false;
+		}
+
+		return true;
+	}
+
 	void HandleMovementRecord(C_TFPlayer* pPlayer, std::deque<MoveRecord>& vRecords)
 	{
 		if (!pPlayer || vRecords.empty())
@@ -93,7 +120,13 @@ namespace
 
 			if (trace.DidHit() && trace.plane.normal.z < 0.7f)
 			{
-				vRecords.clear();
+				// Match Amalgam: clear ALL stale history on wall hit.
+				// The old fallback-from-history approach would chain zero
+				// directions on complex geometry (corridors/corners),
+				// causing the sim to think the enemy stopped moving.
+				// Keep only the current (newest) record and let it
+				// re-derive direction from actual velocity next frame.
+				vRecords.erase(vRecords.begin() + 1, vRecords.end());
 				return;
 			}
 		}
@@ -181,16 +214,18 @@ void CMovementSimulation::Store()
 			continue;
 		}
 
-		// Don't store new records for stationary enemies, but keep existing ones
+		// Keep micro-movement records when simtime advances and origin moved past compression noise.
 		// — they might start moving next frame and we need their direction history
-		if (pPlayer->m_vecVelocity().Length2D() < 10.0f)
-			continue;
-
 		const float flSimTime = pPlayer->m_flSimulationTime();
+		const Vec3 vOrigin = pPlayer->m_vecOrigin();
 		if (!vRecords.empty() && std::fabs(vRecords.front().m_flSimTime - flSimTime) <= 0.0001f)
 			continue;
 
-		if (!vRecords.empty() && (pPlayer->m_vecOrigin() - vRecords.front().m_vOrigin).LengthSqr() > TeleportDistanceSqr)
+		const bool bOriginMoved = vRecords.empty() || HasMeaningfulOriginDelta(vOrigin, vRecords.front().m_vOrigin);
+		if (pPlayer->m_vecVelocity().Length2D() < StationarySpeed && !bOriginMoved)
+			continue;
+
+		if (!vRecords.empty() && (vOrigin - vRecords.front().m_vOrigin).LengthSqr() > TeleportDistanceSqr)
 		{
 			vRecords.clear();
 			m_mSimTimes[n].clear();
@@ -218,7 +253,7 @@ void CMovementSimulation::Store()
 		tRecord.m_flSimTime = flSimTime;
 		tRecord.m_iMode = GetMoveMode(pPlayer);
 		tRecord.m_vVelocity = vVelocity;
-		tRecord.m_vOrigin = pPlayer->m_vecOrigin();
+		tRecord.m_vOrigin = vOrigin;
 
 		vRecords.push_front(tRecord);
 		while (vRecords.size() > MaxMoveRecords)
@@ -255,7 +290,10 @@ bool CMovementSimulation::Initialize(C_TFPlayer* pPlayer, MoveStorage& tMoveStor
 	// We still track whether the player is stationary so callers can check.
 	{
 		C_TFPlayer* pLocal = H::Entities ? H::Entities->GetLocal() : nullptr;
-		tMoveStorage.m_bStationary = (pPlayer != pLocal && pPlayer->m_vecVelocity().Length2D() < 10.0f);
+		const auto itRecords = m_mRecords.find(pPlayer->entindex());
+		const std::deque<MoveRecord> vEmptyRecords = {};
+		const auto& vRecords = itRecords != m_mRecords.end() ? itRecords->second : vEmptyRecords;
+		tMoveStorage.m_bStationary = (pPlayer != pLocal && IsRecentlyStationary(pPlayer, vRecords));
 	}
 
 	g_flOldFrametime = I::GlobalVars->frametime;
@@ -303,7 +341,10 @@ bool CMovementSimulation::Initialize(C_TFPlayer* pPlayer, MoveStorage& tMoveStor
 			pPlayer->m_hGroundEntity() = nullptr;
 	}
 
-	tMoveStorage.m_bBunnyHop = IsBunnyHopping(pPlayer);
+	float flCadenceOut = 0.f;
+	tMoveStorage.m_bBunnyHop = IsBunnyHopping(pPlayer, &flCadenceOut);
+	tMoveStorage.m_flBhopCadence = flCadenceOut;
+	tMoveStorage.m_iBhopSimTicksInAir = 0;
 	SetupMoveData(tMoveStorage, bStrafe);
 	if (bStrafe)
 		StrafePrediction(tMoveStorage, bHitchance);
@@ -348,15 +389,19 @@ void CMovementSimulation::SetupMoveData(MoveStorage& tMoveStorage, bool bStrafe)
 	}
 	else if (!vRecords.empty())
 	{
+		Vec3 vDirection = vRecords.front().m_vDirection;
+		if (vDirection.IsZero())
+			vDirection = DirectionFromVelocity(pPlayer->m_vecVelocity());
+
 		if (pPlayer->InCond(TF_COND_SHIELD_CHARGE))
 			tMoveData.m_vecViewAngles = pPlayer->GetEyeAngles();
 		else if (!pPlayer->m_vecVelocity().To2D().IsZero())
 			tMoveData.m_vecViewAngles = Math::VectorAngles(pPlayer->m_vecVelocity().To2D());
 
 		g_MoveSimCmd = {};
-		g_MoveSimCmd.forwardmove = vRecords.front().m_vDirection.x;
-		g_MoveSimCmd.sidemove = -vRecords.front().m_vDirection.y;
-		g_MoveSimCmd.upmove = vRecords.front().m_vDirection.z;
+		g_MoveSimCmd.forwardmove = vDirection.x;
+		g_MoveSimCmd.sidemove = -vDirection.y;
+		g_MoveSimCmd.upmove = vDirection.z;
 		g_MoveSimCmd.viewangles = {};
 
 		SDK::FixMovement(&g_MoveSimCmd, {}, tMoveData.m_vecViewAngles);
@@ -411,6 +456,9 @@ float CMovementSimulation::GetAverageYaw(C_TFPlayer* pPlayer, int iSamples)
 		const auto& tPrevious = vRecords[i + 1];
 		if (tCurrent.m_iMode != iMode || tPrevious.m_iMode != iMode)
 			break;
+
+		if (tCurrent.m_bHitWall || tPrevious.m_bHitWall)
+			continue;
 
 		if (tCurrent.m_vDirection.IsZero() || tPrevious.m_vDirection.IsZero())
 			continue;
@@ -483,60 +531,138 @@ void CMovementSimulation::StrafePrediction(MoveStorage& tMoveStorage, bool bHitc
 		tMoveStorage.m_flAverageYaw = 0.f;
 }
 
-bool CMovementSimulation::IsBunnyHopping(C_TFPlayer* pPlayer)
+bool CMovementSimulation::IsBunnyHopping(C_TFPlayer* pPlayer, float* pCadenceOut)
 {
+	// ===================================================================
+	// Bhop detection based on observed jump-land-jump pattern.
+	// Logic: enemy jumped, landed, stayed on ground for < 0.200s, jumped
+	// again. If we see at least one complete cycle (jump→land→jump), we
+	// flag them as bhopping and predict the cadence (time between jumps)
+	// for the movement sim to re-inject jumps at the right timing.
+	// ===================================================================
+	if (pCadenceOut)
+		*pCadenceOut = 0.f;
+
 	if (!pPlayer)
 		return false;
 
 	auto& vRecords = m_mRecords[pPlayer->entindex()];
-	if (vRecords.size() < 3)
+	if (vRecords.size() < 4)
 		return false;
 
+	// Must have meaningful speed — walking at 10 HU/s isn't bhopping
 	const float flSpeed = vRecords.front().m_vVelocity.Length2D();
-	if (flSpeed < 150.f)
+	if (flSpeed < 100.f)
 		return false;
 
-	int iTakeoffs = 0;
-	int iLandings = 0;
-	int iGroundSamples = 0;
-	int iAirSamples = 0;
-	int iGroundStreak = 0;
-	int iMaxGroundStreak = 0;
+	// ---- Scan history for jump→land→jump cycles ----
+	// A "cycle" is: air → ground (land) → air (takeoff)
+	// Ground contact time between land and takeoff must be < 0.200s
+	constexpr float MaxGroundContactTime = 0.200f;  // 200ms — about 13 ticks
+	constexpr int MaxHistory = 40;
+	const int iMax = std::min<int>(static_cast<int>(vRecords.size()) - 1, MaxHistory);
 
-	const int iMaxRecords = std::min<int>(static_cast<int>(vRecords.size()) - 1, 33);
-	for (int i = 0; i < iMaxRecords; i++)
+	int iCycles = 0;                // Complete jump→land→jump cycles
+	float flCadenceTotal = 0.f;     // Sum of jump-to-jump times (for averaging)
+	int iCadenceSamples = 0;
+	float flLastTakeoffTime = 0.f;  // SimTime of the last takeoff we found
+
+	// State machine: track ground contact duration from most recent to oldest
+	// We walk backwards in time (vRecords[0] is newest)
+	int iState = 0;  // 0 = looking for land, 1 = on ground measuring, 2 = found takeoff
+	float flLandTime = 0.f;
+	float flTakeoffTime = 0.f;
+
+	for (int i = 0; i < iMax; i++)
 	{
-		const bool bNewGround = vRecords[i].m_iMode == MoveMode::Ground;
-		const bool bOldGround = vRecords[i + 1].m_iMode == MoveMode::Ground;
+		const auto& tNew = vRecords[i];      // More recent
+		const auto& tOld = vRecords[i + 1];  // Older
+		const bool bNewGround = tNew.m_iMode == MoveMode::Ground;
+		const bool bOldGround = tOld.m_iMode == MoveMode::Ground;
 
-		if (bNewGround)
+		// Takeoff: was on ground, now in air
+		if (!bNewGround && bOldGround)
 		{
-			iGroundSamples++;
-			iGroundStreak++;
-			iMaxGroundStreak = std::max(iMaxGroundStreak, iGroundStreak);
+			flTakeoffTime = tNew.m_flSimTime;
+
+			// If we were measuring ground contact time
+			if (iState == 1)
+			{
+				const float flGroundTime = flLandTime - flTakeoffTime;
+				if (flGroundTime >= 0.f && flGroundTime < MaxGroundContactTime)
+				{
+					// Valid cycle: jump→land→jump with short ground contact
+					iCycles++;
+
+					// Cadence = time from this takeoff to the previous takeoff
+					if (flLastTakeoffTime > 0.f)
+					{
+						const float flJumpToJump = flLastTakeoffTime - flTakeoffTime;
+						if (flJumpToJump > 0.f && flJumpToJump < 2.0f)
+						{
+							flCadenceTotal += flJumpToJump;
+							iCadenceSamples++;
+						}
+					}
+				}
+			}
+
+			flLastTakeoffTime = flTakeoffTime;
+			iState = 0;  // Back to looking for next landing
+		}
+		// Landing: was in air, now on ground
+		else if (bNewGround && !bOldGround)
+		{
+			flLandTime = tNew.m_flSimTime;
+			iState = 1;  // Start measuring ground contact duration
+		}
+		// Still on ground — check if ground contact exceeded max
+		else if (bNewGround && bOldGround && iState == 1)
+		{
+			const float flGroundSoFar = flLandTime - tOld.m_flSimTime;
+			if (flGroundSoFar >= MaxGroundContactTime)
+			{
+				// They stayed on ground too long — this isn't a bhop transition
+				iState = 0;
+			}
+		}
+	}
+
+	// Need at least 1 complete cycle to confirm bhop
+	if (iCycles < 1)
+		return false;
+
+	// Speed must be maintained throughout — bhoppers keep momentum
+	// Check that the most recent record still has decent speed
+	const float flMaxSpeed = std::max(pPlayer->TeamFortress_CalculateMaxSpeed(), 230.f);
+	if (flSpeed < flMaxSpeed * 0.65f)
+		return false;
+
+	// ---- Calculate predicted cadence ----
+	// If we have observed jump-to-jump times, use their average.
+	// Otherwise, estimate from gravity: air_time = 2 * Vz_jump / gravity
+	// TF2 jump velocity = sqrt(2 * gravity * 45) where 45 = GAMEMOVEMENT_JUMP_HEIGHT
+	if (pCadenceOut)
+	{
+		if (iCadenceSamples > 0)
+		{
+			*pCadenceOut = flCadenceTotal / static_cast<float>(iCadenceSamples);
 		}
 		else
 		{
-			iAirSamples++;
-			iGroundStreak = 0;
+			// Estimate from physics:
+			// jump_vel = sqrt(2 * g * 45)
+			// air_time = 2 * jump_vel / g
+			// cadence = air_time + ~2 ticks ground contact
+			static ConVar* sv_gravity = U::ConVars.FindVar("sv_gravity");
+			const float flGravity = sv_gravity ? sv_gravity->GetFloat() : 800.f;
+			const float flJumpVel = std::sqrtf(2.f * flGravity * 45.f);
+			const float flAirTime = 2.f * flJumpVel / flGravity;
+			*pCadenceOut = flAirTime + TICK_INTERVAL * 2.f;  // + ~2 tick ground contact
 		}
-
-		if (!bNewGround && bOldGround)
-			iTakeoffs++;
-		else if (bNewGround && !bOldGround)
-			iLandings++;
 	}
 
-	if (vRecords.front().m_iMode == MoveMode::Ground && vRecords[1].m_iMode == MoveMode::Air)
-		return true;
-
-	if (iTakeoffs >= 2)
-		return true;
-
-	if (iTakeoffs >= 1 && iLandings >= 1 && iAirSamples > iGroundSamples && iMaxGroundStreak <= 2)
-		return true;
-
-	return false;
+	return true;
 }
 
 int CMovementSimulation::GetChokedTicks(C_TFPlayer* pPlayer) const
@@ -587,19 +713,30 @@ void CMovementSimulation::RunTick(MoveStorage& tMoveStorage, bool bPath, const R
 		const float flFriction = bAir ? 1.f : GetFrictionScale(pPlayer);
 		tMoveStorage.m_MoveData.m_vecViewAngles.y += tMoveStorage.m_flAverageYaw * flFriction + flCorrection;
 	}
-	else if (!IsOnGround(pPlayer) && GetMoveMode(pPlayer) != MoveMode::Swim)
-	{
-		tMoveStorage.m_MoveData.m_flForwardMove = 0.f;
-		tMoveStorage.m_MoveData.m_flSideMove = 0.f;
-	}
 
 	if (IsDucking(pPlayer) && IsOnGround(pPlayer) && GetMoveMode(pPlayer) != MoveMode::Swim)
 		tMoveStorage.m_MoveData.m_flClientMaxSpeed /= 3.f;
 
-	if (tMoveStorage.m_bBunnyHop && IsOnGround(pPlayer) && !pPlayer->m_bDucked())
+	if (tMoveStorage.m_bBunnyHop)
 	{
-		tMoveStorage.m_MoveData.m_nOldButtons &= ~IN_JUMP;
-		tMoveStorage.m_MoveData.m_nButtons |= IN_JUMP;
+		// Bhop jump injection:
+		// Match Amalgam's approach — when the player is on ground and
+		// we've detected bhopping, inject IN_JUMP and clear OldButtons
+		// so the engine processes it as a fresh jump.
+		// No ready-flag needed — the engine's own OldButtons logic
+		// handles the "can't jump twice" constraint.
+		tMoveStorage.m_MoveData.m_nButtons &= ~IN_JUMP;
+
+		if (IsOnGround(pPlayer) && !pPlayer->m_bDucked())
+		{
+			tMoveStorage.m_MoveData.m_nOldButtons &= ~IN_JUMP;
+			tMoveStorage.m_MoveData.m_nButtons |= IN_JUMP;
+			tMoveStorage.m_iBhopSimTicksInAir = 0;  // Reset air counter on jump
+		}
+		else if (!IsOnGround(pPlayer))
+		{
+			tMoveStorage.m_iBhopSimTicksInAir++;
+		}
 	}
 
 	I::GameMovement->ProcessMovement(pPlayer, &tMoveStorage.m_MoveData);

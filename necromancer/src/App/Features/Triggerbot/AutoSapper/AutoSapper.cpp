@@ -172,7 +172,7 @@ void CAutoSapper::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCm
 		pCmd->viewangles = vAngleTo;
 
 		if (CFG::Triggerbot_AutoSapper_Aim_Mode == 1)
-			G::bPSilentAngles = true;
+			G::bSilentAngles = true;
 	}
 
 	pCmd->buttons |= IN_ATTACK;

@@ -100,7 +100,7 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 
 	// Reset per-frame state
 	G::bSilentAngles = false;
-	G::bPSilentAngles = false;
+	G::bSilentAngles = false;
 	G::bFiring = false;
 	G::bAutoScopeWaitActive = false;
 	G::Attacking = 0;
@@ -138,12 +138,22 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	if (!pBufferCmd)
 		pBufferCmd = pCmd;
 
-	I::Prediction->Update(
-		I::ClientState->m_nDeltaTick,
-		I::ClientState->m_nDeltaTick > 0,
-		I::ClientState->last_command_ack,
-		I::ClientState->lastoutgoingcommand + I::ClientState->chokedcommands
-	);
+	// Run Prediction::Update on the first shift tick of each frame, and always
+	// during non-shift frames. On subsequent shift ticks in the same frame,
+	// m_nDeltaTick hasn't changed (no new server ACK), so replaying would
+	// double-advance tickbase. Running on shift tick 0 lets the client replay
+	// unacknowledged commands from before the shift, keeping tickbase in sync.
+	// Do NOT manually increment m_nTickBase during shifts — the next frame's
+	// Prediction::Update will replay the shift commands via RunCommand.
+	if (!Shifting::bShifting || Shifting::nCurrentShiftTick == 0)
+	{
+		I::Prediction->Update(
+			I::ClientState->m_nDeltaTick,
+			I::ClientState->m_nDeltaTick > 0,
+			I::ClientState->last_command_ack,
+			I::ClientState->lastoutgoingcommand + I::ClientState->chokedcommands
+		);
+	}
 
 	// Update tick tracking for doubletap high ping compensation
 	{
@@ -189,6 +199,10 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	{
 		if (pCmd->buttons & IN_JUMP)
 			pCmd->buttons &= ~IN_JUMP;
+		if (pCmd->buttons & IN_ATTACK)
+			pCmd->buttons &= ~IN_ATTACK;
+		if (pCmd->buttons & IN_ATTACK2)
+			pCmd->buttons &= ~IN_ATTACK2;
 		return CALL_ORIGINAL(ecx, flInputSampleTime, pCmd);
 	}
 
@@ -553,31 +567,8 @@ MAKE_HOOK(CHLClient_Createmove, Memory::GetVFunc(I::ClientModeShared, 21), bool,
 	if (I::ClientState->chokedcommands > 21)
 		bSendPacket = true;
 
-	// pSilent handling - MUST run BEFORE RapidFire (like reference project)
-	// This ensures RapidFire saves the command with aimbot angles, not restored angles
-	{
-		static bool bWasSet = false;
-		if (G::bPSilentAngles)
-		{
-			bSendPacket = false;
-			bWasSet = true;
-		}
-		else
-		{
-			if (bWasSet && !G::bSilentAngles)
-			{
-				bSendPacket = true;
-				pCmd->viewangles = vOldAngles;
-				pCmd->sidemove = flOldSide;
-				pCmd->forwardmove = flOldForward;
-				bWasSet = false;
-			}
-			else if (bWasSet && G::bSilentAngles)
-			{
-				bWasSet = false;
-			}
-		}
-	}
+	// pSilent removed — was choking packets and causing tick issues.
+	// All aimbots now use bSilentAngles (view restore only, no choke).
 
 	// ============================================
 	// RapidFire/Ticks management - AFTER pSilent handling (like reference)
@@ -623,7 +614,7 @@ AfterPrediction:
 	G::vUserCmdAngles = pCmd->viewangles;
 
 	// Silent aim handling
-	if (G::bSilentAngles || G::bPSilentAngles)
+	if (G::bSilentAngles)
 	{
 		// Use TRUE original angles for view restoration
 		// This ensures anti-cheat lerping doesn't affect what the player sees

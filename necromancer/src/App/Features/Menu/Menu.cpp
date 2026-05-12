@@ -4249,7 +4249,7 @@ void CMenu::MainWindow()
 		m_mapGroupBoxes["Exploits_Shifting"].m_fnRenderContent = [this]() {
 			// Keys
 			InputKey("Recharge Key", CFG::Exploits_Shifting_Recharge_Key);
-			InputKey("Doubletap Key", CFG::Exploits_RapidFire_Key);
+			{ static bool bDTDisabled = false; CheckBox("DT (currently disabled)", bDTDisabled); bDTDisabled = false; }
 			InputKey("Fast Sticky Key", CFG::Exploits_FastSticky_Key);
 			InputKey("Warp Key", CFG::Exploits_Warp_Key);
 			
@@ -4262,8 +4262,8 @@ void CMenu::MainWindow()
 				SliderInt("Recharge Limit", CFG::Exploits_Shifting_Recharge_Limit, 2, 24, 1);
 				const bool bLimitTicks = CFG::Misc_AntiCheat_Enabled && !CFG::Misc_AntiCheat_IgnoreTickLimit;
 				const int nMaxSlider = bLimitTicks ? 8 : 22;
-				SliderInt(bLimitTicks ? "Doubletap Ticks (Safe)" : "Doubletap Ticks", CFG::Exploits_RapidFire_Ticks, 2, nMaxSlider, 1);
-				SliderInt("Doubletap Delay Ticks", CFG::Exploits_RapidFire_Min_Ticks_Target_Same, 0, 5, 1);
+				SliderInt(bLimitTicks ? "DT Ticks (Safe)" : "DT Ticks", CFG::Exploits_RapidFire_Ticks, 2, nMaxSlider, 1);
+				SliderInt("DT Delay Ticks", CFG::Exploits_RapidFire_Min_Ticks_Target_Same, 0, 5, 1);
 				SliderInt("Cmds/Packet (Idle)", CFG::Exploits_RapidFire_Max_Commands, 1, 15, 1);
 				SliderInt("Cmds/Packet (Shifting)", CFG::Exploits_RapidFire_DT_Commands, 1, 24, 1);
 			}
@@ -4278,10 +4278,10 @@ void CMenu::MainWindow()
 			
 			// Tracking & safety
 			SelectSingle("Tick Tracking", CFG::Exploits_RapidFire_Tick_Tracking, {
-				{ "Disabled", 0 }, { "Linear", 1 }
+				{ "Disabled", 0 }, { "Adaptive", 1 }
 			});
 			CheckBox("Deficit Tracking", CFG::Exploits_RapidFire_Deficit_Tracking);
-			CheckBox("Doubletap Antiwarp", CFG::Exploits_RapidFire_Antiwarp);
+			CheckBox("DT Antiwarp", CFG::Exploits_RapidFire_Antiwarp);
 			
 			// Visual
 			CheckBox("Draw Indicator", CFG::Exploits_Shifting_Draw_Indicator);

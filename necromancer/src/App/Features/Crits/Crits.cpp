@@ -419,7 +419,7 @@ void CCritHack::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)
 					pCmd->buttons |= IN_ATTACK2;
 			}
 			
-			G::bPSilentAngles = false;
+			G::bSilentAngles = false;
 			return;
 		}
 	}

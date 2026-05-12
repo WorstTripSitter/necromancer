@@ -550,7 +550,7 @@ void CAimbotMelee::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 				if (Shifting::bShifting && Shifting::bShiftingWarp)
 					G::bSilentAngles = true;
 
-				else G::bPSilentAngles = true;
+				else G::bSilentAngles = true;
 			}
 
 			break;

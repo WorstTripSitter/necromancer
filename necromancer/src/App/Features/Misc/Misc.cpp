@@ -309,7 +309,7 @@ void CMisc::FastAccelerate(CUserCmd* pCmd)
 
 	// Skip on attack, doubletap, recharge, or every other tick
 	// Also skip when anti-aim is active (like Amalgam) - they're incompatible
-	if (G::Attacking == 1 || Shifting::bRecharging || I::GlobalVars->tickcount % 2)
+	if (G::Attacking == 1 || Shifting::bRecharging || Shifting::bStickyDTWantShift || I::GlobalVars->tickcount % 2)
 		return;
 	
 	// Skip when anti-aim is active - FastAccelerate and anti-aim both manipulate
@@ -336,7 +336,7 @@ void CMisc::FastAccelerate(CUserCmd* pCmd)
 	pCmd->sidemove = 0.0f;
 	pCmd->viewangles.y = fmodf(pCmd->viewangles.y - vAngMoveReverse.y, 360.0f);
 	pCmd->viewangles.z = 270.0f;
-	G::bPSilentAngles = true;
+	G::bSilentAngles = true;
 }
 
 bool CMisc::SetRocketJumpAngles(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd)

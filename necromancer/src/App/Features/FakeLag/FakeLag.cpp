@@ -71,7 +71,6 @@ bool CFakeLag::IsAllowed(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* 
 	// Preserve blast jump takes priority
 	if (m_bPreservingBlast)
 	{
-		G::bPSilentAngles = true; // Prevent unchoking while grounded
 		return true;
 	}
 	
@@ -283,8 +282,6 @@ EFakeLagThreatType CFakeLag::CheckSniperThreat(C_TFPlayer* pLocal, int& outMinTi
 
 void CFakeLag::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* pCmd, bool* pSendPacket)
 {
-	// Default to sending packet
-	*pSendPacket = true;
 	m_eCurrentThreat = EFakeLagThreatType::None;
 	
 	// Set goal to 22 for adaptive mode

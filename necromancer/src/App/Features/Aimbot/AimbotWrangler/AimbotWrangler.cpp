@@ -692,7 +692,7 @@ bool CAimbotWrangler::GetRocketTarget(C_TFPlayer* pLocal, C_ObjectSentrygun* pSe
 	return false;
 }
 
-void CAimbotWrangler::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles)
+void CAimbotWrangler::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles, bool bIsFiring)
 {
 	Vec3 vAngleTo = vAngles;
 	Math::ClampAngles(vAngleTo);
@@ -707,12 +707,18 @@ void CAimbotWrangler::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngle
 			break;
 		}
 		
-		// Silent
+		// Silent — only choke packet (pSilent) when actually firing.
 		case 1:
 		{
 			H::AimUtils->FixMovement(pCmd, vAngleTo);
 			pCmd->viewangles = vAngleTo;
-			G::bSilentAngles = true;
+
+			if (Shifting::bShifting && Shifting::bShiftingWarp)
+				G::bSilentAngles = true;  // Warp: choke handled by warp system
+			else if (bIsFiring)
+				G::bSilentAngles = true;  // Firing tick: silent aim, restore view next tick
+			else
+				G::bSilentAngles = true;  // Not firing: just hide local view, no choke
 			break;
 		}
 		
@@ -870,17 +876,26 @@ void CAimbotWrangler::Run(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* pW
 	if (bRocketReady && bFoundRocketTarget)
 		DrawVisualization(pSentry, rocketTarget, true);
 	
-	Aim(pCmd, pLocal, pAimTarget->AngleTo);
-	
-	// Auto-fire
+	bool bWillFire = (pCmd->buttons & (IN_ATTACK | IN_ATTACK2)) != 0;
+
+	// Auto-fire before Aim so silent aim can tell whether this command shoots.
 	if (ShouldFire(pLocal, pSentry, *pAimTarget))
 	{
 		// Always fire bullets if we have ammo
 		if (CanFireBullets(pSentry))
+		{
 			pCmd->buttons |= IN_ATTACK;
+			bWillFire = true;
+		}
 		
 		// Fire rocket if ready
 		if (bRocketReady && bFoundRocketTarget)
+		{
 			pCmd->buttons |= IN_ATTACK2;
+			bWillFire = true;
+		}
 	}
+
+	G::bFiring = bWillFire;
+	Aim(pCmd, pLocal, pAimTarget->AngleTo, bWillFire);
 }

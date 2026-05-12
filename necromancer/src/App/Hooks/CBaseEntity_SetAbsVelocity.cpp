@@ -60,12 +60,19 @@ MAKE_HOOK(CBaseEntity_SetAbsVelocity, Signatures::CBaseEntity_SetAbsVelocity.Get
 	if (reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == Signatures::CBasePlayer_PostDataUpdate_SetAbsVelocityCall.Get())
 	{
 		const auto pPlayer = ecx->As<C_TFPlayer>();
+		const int nPlayerIndex = pPlayer->entindex();
 		if (pPlayer->IsDormant())
+		{
+			g_AmalgamEntitiesExt.SetAvgVelocity(nPlayerIndex, Vec3{});
 			return CALL_ORIGINAL(ecx, vecAbsVelocity);
+		}
 
-		auto pRecords = g_AmalgamEntitiesExt.GetOrigins(pPlayer->entindex());
+		auto pRecords = g_AmalgamEntitiesExt.GetOrigins(nPlayerIndex);
 		if (!pRecords || pRecords->empty())
+		{
+			g_AmalgamEntitiesExt.SetAvgVelocity(nPlayerIndex, Vec3{});
 			return CALL_ORIGINAL(ecx, vecAbsVelocity);
+		}
 
 		auto& tOldRecord = pRecords->front();
 		auto tNewRecord = CAmalgamEntitiesHelper::VelFixOriginRecord{ pPlayer->m_vecOrigin() + Vec3(0, 0, pPlayer->m_vecMaxs().z), pPlayer->m_flSimulationTime() };
@@ -73,13 +80,17 @@ MAKE_HOOK(CBaseEntity_SetAbsVelocity, Signatures::CBaseEntity_SetAbsVelocity.Get
 		int iDeltaTicks = TIME_TO_TICKS(tNewRecord.m_flSimulationTime - tOldRecord.m_flSimulationTime);
 		float flDeltaTime = TICKS_TO_TIME(iDeltaTicks);
 		if (iDeltaTicks <= 0)
-			return;
+		{
+			g_AmalgamEntitiesExt.SetAvgVelocity(nPlayerIndex, Vec3{});
+			return CALL_ORIGINAL(ecx, vecAbsVelocity);
+		}
 
 		static auto sv_lagcompensation_teleport_dist = I::CVar->FindVar("sv_lagcompensation_teleport_dist");
 		float flDist = powf(sv_lagcompensation_teleport_dist ? sv_lagcompensation_teleport_dist->GetFloat() : 64.f, 2.f) * iDeltaTicks;
 		if ((tNewRecord.m_vecOrigin - tOldRecord.m_vecOrigin).Length2DSqr() >= flDist)
 		{
 			pRecords->clear();
+			g_AmalgamEntitiesExt.SetAvgVelocity(nPlayerIndex, Vec3{});
 			return CALL_ORIGINAL(ecx, vecAbsVelocity);
 		}
 
@@ -133,7 +144,7 @@ MAKE_HOOK(CBaseEntity_SetAbsVelocity, Signatures::CBaseEntity_SetAbsVelocity.Get
 			}
 		}
 
-		g_AmalgamEntitiesExt.SetAvgVelocity(pPlayer->entindex(), tAxisInfo.Get(bGrounded));
+		g_AmalgamEntitiesExt.SetAvgVelocity(nPlayerIndex, tAxisInfo.Get(bGrounded));
 		CALL_ORIGINAL(ecx, (tNewRecord.m_vecOrigin - tOldRecord.m_vecOrigin) / flDeltaTime);
 		return;
 	}

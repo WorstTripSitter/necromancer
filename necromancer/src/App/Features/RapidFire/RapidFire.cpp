@@ -66,7 +66,7 @@ bool CRapidFire::ShouldStart(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon)
 		return false;
 
 	// Tick tracking - delay shift if we're too far ahead of server
-	if (Shifting::ShouldDelayShift(CFG::Exploits_RapidFire_Tick_Tracking))
+	if (Shifting::ShouldDelayShift(F::Ticks->GetOptimalTickTrackingMode()))
 		return false;
 
 	// Projectile dodge airborne check
@@ -133,6 +133,8 @@ bool CRapidFire::ShouldStart(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon)
 void CRapidFire::Run(CUserCmd* pCmd, bool* pSendPacket)
 {
 	Shifting::bRapidFireWantShift = false;
+	if (!pSendPacket)
+		return;
 
 	const auto pLocal = H::Entities->GetLocal();
 	if (!pLocal)
@@ -147,6 +149,9 @@ void CRapidFire::Run(CUserCmd* pCmd, bool* pSendPacket)
 		const bool bIsProjectile = IsProjectileWeapon(pWeapon);
 		const bool bIsSticky = IsStickyWeapon(pWeapon);
 
+		if (!*pSendPacket)
+			return;
+
 		Shifting::bRapidFireWantShift = true;
 
 		m_ShiftCmd = *pCmd;
@@ -156,7 +161,7 @@ void CRapidFire::Run(CUserCmd* pCmd, bool* pSendPacket)
 		else
 			m_ShiftCmd.buttons |= IN_ATTACK;
 		
-		m_bShiftSilentAngles = G::bSilentAngles || G::bPSilentAngles;
+		m_bShiftSilentAngles = G::bSilentAngles;
 		m_bSetCommand = false;
 		m_bIsProjectileDT = bIsProjectile;
 		m_bIsStickyDT = bIsSticky;
@@ -174,7 +179,6 @@ void CRapidFire::Run(CUserCmd* pCmd, bool* pSendPacket)
 		if (pWeapon->GetWeaponID() == TF_WEAPON_MINIGUN)
 			pCmd->buttons |= IN_ATTACK2;
 
-		*pSendPacket = true;
 	}
 }
 
@@ -415,6 +419,9 @@ bool CRapidFire::ShouldStartFastSticky(C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 
 void CRapidFire::RunFastSticky(CUserCmd* pCmd, bool* pSendPacket)
 {
+	if (!pSendPacket)
+		return;
+
 	const auto pLocal = H::Entities->GetLocal();
 	if (!pLocal || pLocal->deadflag())
 	{
@@ -475,6 +482,9 @@ void CRapidFire::RunFastSticky(CUserCmd* pCmd, bool* pSendPacket)
 
 	if (nTicksToUse >= 1)
 	{
+		if (!*pSendPacket)
+			return;
+
 		Shifting::bRecharging = false;
 		pCmd->buttons |= IN_ATTACK;
 
@@ -484,7 +494,7 @@ void CRapidFire::RunFastSticky(CUserCmd* pCmd, bool* pSendPacket)
 		m_ShiftCmd = *pCmd;
 		m_ShiftCmd.buttons |= IN_ATTACK;
 
-		m_bShiftSilentAngles = G::bSilentAngles || G::bPSilentAngles;
+		m_bShiftSilentAngles = G::bSilentAngles;
 		m_bSetCommand = false;
 		m_bIsProjectileDT = false;
 		m_bIsStickyDT = true;
@@ -497,7 +507,6 @@ void CRapidFire::RunFastSticky(CUserCmd* pCmd, bool* pSendPacket)
 		m_nShiftTick = 0;
 		m_nShiftTotal = nTicksToUse;
 
-		*pSendPacket = true;
 	}
 	else
 	{

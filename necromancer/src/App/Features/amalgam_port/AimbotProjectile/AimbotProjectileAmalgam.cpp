@@ -1249,16 +1249,16 @@ void CAmalgamAimbotProjectile::Aim(CUserCmd* pCmd, Vec3& vAngle, int iMethod, bo
 		I::EngineClient->SetViewAngles(vOut);
 		break;
 	case Vars::Aimbot::General::AimTypeEnum::Silent:
-		// For silent aim, apply angles when we're firing
-		// Removed G::bCanPrimaryAttack check - projectile weapons can fire even when
-		// CanPrimaryAttack returns false (e.g., Beggar's Bazooka loading, reload interrupt)
-		// The bIsFiring parameter already indicates we want to shoot
-		if (bIsFiring)
-		{
-			H::AimUtils->FixMovement(pCmd, vOut);
-			pCmd->viewangles = vOut;
-			G::bPSilentAngles = true;
-		}
+		// Silent — only choke packet (pSilent) when actually firing.
+		H::AimUtils->FixMovement(pCmd, vOut);
+		pCmd->viewangles = vOut;
+
+		if (Shifting::bShifting && Shifting::bShiftingWarp)
+			G::bSilentAngles = true;  // Warp: choke handled by warp system
+		else if (bIsFiring)
+			G::bSilentAngles = true;  // Firing tick: silent aim, restore view next tick
+		else
+			G::bSilentAngles = true;  // Not firing: just hide local view, no choke
 		break;
 	case Vars::Aimbot::General::AimTypeEnum::Locking:
 	case Vars::Aimbot::General::AimTypeEnum::Smooth:
@@ -1345,8 +1345,14 @@ bool CAmalgamAimbotProjectile::RunMain(C_TFPlayer* pLocal, C_TFWeaponBase* pWeap
 			}
 		}
 
-		// Determine if we're actually firing this tick
-		const bool bIsFiring = (pCmd->buttons & IN_ATTACK) && G::bCanPrimaryAttack;
+		// Re-check CanPrimaryAttack with the PREDICTED tickbase.
+		// G::bCanPrimaryAttack was set before EnginePrediction::Start() and can be
+		// stale — the weapon's m_flNextPrimaryAttack may have expired by the predicted
+		// curtime, meaning the server WILL fire the rocket, but we'd skip applying
+		// aimbot angles because bIsFiring was false. This caused rockets to shoot
+		// at the current view direction instead of the aimbot target.
+		const bool bCanFireNow = pWeapon->CanPrimaryAttack(pLocal) && pWeapon->HasPrimaryAmmoForShot();
+		const bool bIsFiring = (pCmd->buttons & IN_ATTACK) && bCanFireNow;
 		
 		F::AmalgamAimbot.m_bRan = G::Attacking = SDK::IsAttacking(pLocal, pWeapon, pCmd, true);
 		G::bFiring = bIsFiring;

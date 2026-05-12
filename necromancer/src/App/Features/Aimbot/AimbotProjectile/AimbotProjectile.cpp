@@ -1606,28 +1606,20 @@ void CAimbotProjectile::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, C_TFWeaponBase* 
 
 	case 1:
 	{
-		// For pSilent, we need to apply angles when:
-		// 1. Flamethrower (always)
-		// 2. Normal weapons when G::bCanPrimaryAttack is true
-		// 3. Stickies/pipes when releasing charge (G::bFiring is set by IsFiring check)
-		const bool bShouldApply = m_CurProjInfo.Flamethrower || G::bCanPrimaryAttack || (m_CurProjInfo.Pipes && G::bFiring);
-		
-		if (bShouldApply)
-		{
-			H::AimUtils->FixMovement(pCmd, vAngleTo);
+		// Silent — apply aimbot angles, hide from local view.
+		// Only use pSilent (packet choke) when actually firing.
+		// When not firing, use normal silent (just hide local view).
+		H::AimUtils->FixMovement(pCmd, vAngleTo);
+		pCmd->viewangles = vAngleTo;
 
-			pCmd->viewangles = vAngleTo;
-
-			if (m_CurProjInfo.Flamethrower)
-			{
-				G::bSilentAngles = true;
-			}
-
-			else
-			{
-				G::bPSilentAngles = true;
-			}
-		}
+		if (m_CurProjInfo.Flamethrower)
+			G::bSilentAngles = true;  // Flamethrower: continuous, never choke
+		else if (Shifting::bShifting && Shifting::bShiftingWarp)
+			G::bSilentAngles = true;  // Warp: choke handled by warp system
+		else if (G::bFiring)
+			G::bSilentAngles = true;  // Firing tick: silent aim, restore view next tick
+		else
+			G::bSilentAngles = true;  // Not firing: just hide local view, no choke
 
 		break;
 	}

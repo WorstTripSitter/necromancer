@@ -42,8 +42,9 @@ public:
 	int GetOptimalRechargeLimit();
 	int GetOptimalDTTicks();
 	int GetOptimalDelayTicks();
-	int GetOptimalMaxCommands();
-	int GetOptimalDTCommands();
+	int GetOptimalTickTrackingMode();   // Auto-select tick tracking mode based on ping/deficit
+	bool GetOptimalDeficitTracking();   // Auto-enable deficit tracking when ping is high
+	int GetMaxSafeShiftTicks();         // Max ticks we can shift without exceeding sv_maxusrcmdprocessticks
 };
 
 MAKE_SINGLETON_SCOPED(CTickbaseManip, Ticks, F);

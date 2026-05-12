@@ -22,6 +22,7 @@ struct MoveRecord
 	MoveMode m_iMode = MoveMode::Ground;
 	Vec3 m_vVelocity = {};
 	Vec3 m_vOrigin = {};
+	bool m_bHitWall = false;
 };
 
 struct MoveStorage
@@ -32,6 +33,8 @@ struct MoveStorage
 
 	float m_flAverageYaw = 0.f;
 	bool m_bBunnyHop = false;
+	float m_flBhopCadence = 0.f;        // Predicted time between jumps (seconds)
+	int m_iBhopSimTicksInAir = 0;       // Ticks airborne in the sim (for jump timing)
 
 	float m_flSimTime = 0.f;
 	float m_flPredictedDelta = 0.f;
@@ -77,7 +80,7 @@ private:
 	float GetAverageYaw(C_TFPlayer* pPlayer, int iSamples);
 	void StrafePrediction(MoveStorage& tMoveStorage, bool bHitchance);
 
-	bool IsBunnyHopping(C_TFPlayer* pPlayer);
+	bool IsBunnyHopping(C_TFPlayer* pPlayer, float* pCadenceOut = nullptr);
 	int GetChokedTicks(C_TFPlayer* pPlayer) const;
 
 	void SetBounds(C_TFPlayer* pPlayer);

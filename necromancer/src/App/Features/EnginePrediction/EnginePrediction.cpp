@@ -72,11 +72,15 @@ void CEnginePrediction::Simulate(C_TFPlayer* pLocal, CUserCmd* pCmd)
 	I::Prediction->m_bInPrediction = true;
 	I::Prediction->SetLocalViewAngles(pCmd->viewangles);
 
-	AdjustPlayers(pLocal);
+	// NOTE: AdjustPlayers/RestorePlayers are NOT called here.
+	// They're called in CPrediction_RunSimulation where they belong.
+	// Calling SetAbsOrigin here dirties the spatial partition handles,
+	// which removes entities from the partition even after RestorePlayers
+	// puts positions back. This breaks TraceRay for aimbot traces.
+
 	I::Prediction->SetupMove(pLocal, pCmd, I::MoveHelper, &m_MoveData);
 	I::GameMovement->ProcessMovement(pLocal, &m_MoveData);
 	I::Prediction->FinishMove(pLocal, pCmd, &m_MoveData);
-	RestorePlayers();
 
 	I::MoveHelper->SetHost(nullptr);
 	pLocal->SetCurrentCommand(nullptr);

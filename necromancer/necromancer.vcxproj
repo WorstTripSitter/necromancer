@@ -425,12 +425,14 @@
     <ClCompile Include="src\App\Features\VisualUtils\VisualUtils.cpp" />
     <ClCompile Include="src\App\Features\Weather\Weather.cpp" />
     <ClCompile Include="src\App\Features\WorldModulation\WorldModulation.cpp" />
+    <ClCompile Include="src\App\Hooks\CBaseAnimating_Interpolate.cpp" />
     <ClCompile Include="src\App\Hooks\CBaseAnimating_SetupBones.cpp" />
     <ClCompile Include="src\App\Hooks\CBaseEntity_AddVar.cpp" />
     <ClCompile Include="src\App\Hooks\CBaseEntity_BaseInterpolatePart1.cpp" />
     <ClCompile Include="src\App\Hooks\CBaseEntity_InterpolateServerEntities.cpp" />
     <ClCompile Include="src\App\Hooks\CBaseEntity_ResetLatched.cpp" />
     <ClCompile Include="src\App\Hooks\CBaseEntity_SetAbsVelocity.cpp" />
+    <ClCompile Include="src\App\Hooks\CBaseViewModel_Interpolate.cpp" />
     <ClCompile Include="src\App\Hooks\CBaseHudChatLine_InsertAndColorizeText.cpp" />
     <ClCompile Include="src\App\Hooks\CBasePlayer_CalcPlayerView.cpp" />
     <ClCompile Include="src\App\Hooks\CClientScoreBoardDialog_NeedsUpdate.cpp" />

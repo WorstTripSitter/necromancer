@@ -58,8 +58,8 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 	const int nUserLimit = F::Ticks->GetOptimalRechargeLimit();
 	nMaxTicks = std::min(nMaxTicks, nUserLimit);
 
-	// Deficit Compensation
-	if (CFG::Exploits_RapidFire_Deficit_Tracking && Shifting::nDeficit > 0)
+	// Deficit Compensation — reduce available ticks when server drops commands
+	if (F::Ticks->GetOptimalDeficitTracking() && Shifting::nDeficit > 0)
 	{
 		Shifting::nDeficit--;
 		if (Shifting::nAvailableTicks > 0)
@@ -102,7 +102,7 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 		Shifting::bShifting = true;
 		Shifting::bShiftingRapidFire = true;
 
-		const int nTicks = std::min(F::Ticks->GetOptimalDTTicks(), Shifting::nAvailableTicks);
+		const int nTicks = std::min({F::Ticks->GetOptimalDTTicks(), Shifting::nAvailableTicks, F::Ticks->GetMaxSafeShiftTicks()});
 		
 		Shifting::nTotalShiftTicks = nTicks;
 		Shifting::nCurrentShiftTick = 0;
@@ -114,11 +114,13 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 			Shifting::nAvailableTicks--;
 		}
 
+		// Track how many commands we sent for deficit detection
+		Shifting::OnCommandsSent(nTicks);
+
 		Shifting::bShifting = false;
 		Shifting::bShiftingRapidFire = false;
 		Shifting::nCurrentShiftTick = 0;
 		Shifting::nTotalShiftTicks = 0;
-		Shifting::nDeficit = 0;
 		
 		return;
 	}
@@ -143,11 +145,13 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 			Shifting::nAvailableTicks--;
 		}
 
+		// Track how many commands we sent for deficit detection
+		Shifting::OnCommandsSent(nTicks);
+
 		Shifting::bShifting = false;
 		Shifting::bShiftingRapidFire = false;
 		Shifting::nCurrentShiftTick = 0;
 		Shifting::nTotalShiftTicks = 0;
-		Shifting::nDeficit = 0;
 		
 		return;
 	}
@@ -170,6 +174,8 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 				Shifting::nAvailableTicks--;
 			}
 
+			Shifting::OnCommandsSent(nTicks);
+
 			Shifting::bShifting = false;
 			Shifting::bShiftingWarp = false;
 			return;
@@ -190,6 +196,7 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 						callOriginal(n == 1);
 						Shifting::nAvailableTicks--;
 					}
+					Shifting::OnCommandsSent(2);
 				}
 				else
 				{
@@ -199,6 +206,7 @@ MAKE_HOOK(CL_Move, Signatures::CL_Move.Get(), void, __fastcall,
 						callOriginal(n == nTicks - 1);
 						Shifting::nAvailableTicks--;
 					}
+					Shifting::OnCommandsSent(nTicks);
 				}
 
 				Shifting::bShifting = false;

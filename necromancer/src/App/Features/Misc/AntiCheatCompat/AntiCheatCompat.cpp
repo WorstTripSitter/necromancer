@@ -65,6 +65,14 @@ void CAntiCheatCompat::ProcessCommand(CUserCmd* pCmd, bool* pSendPacket)
 	if (m_vHistory.size() < 3)
 		return;
 
+	auto preserveCurrentPacketGate = [&]()
+	{
+		// Anti-cheat correction may force a choke to mirror history, but it
+		// must not turn a CL_Move non-final command into a sent packet.
+		*pSendPacket = *pSendPacket && m_vHistory[1].m_bSendingPacket;
+		m_vHistory[0].m_bSendingPacket = *pSendPacket;
+	};
+
 	// Prevent trigger checks, though this shouldn't happen ordinarily
 	if (!m_vHistory[0].m_bAttack1 && m_vHistory[1].m_bAttack1 && !m_vHistory[2].m_bAttack1)
 		pCmd->buttons |= IN_ATTACK;
@@ -83,7 +91,7 @@ void CAntiCheatCompat::ProcessCommand(CUserCmd* pCmd, bool* pSendPacket)
 			if (Math::CalcFov(pCmd->viewangles, m_vHistory[2].m_vAngle) < REAL_EPSILON)
 				pCmd->viewangles = m_vHistory[0].m_vAngle + Vec3(0.f, REAL_EPSILON * 2, 0.f);
 			m_vHistory[0].m_vAngle = pCmd->viewangles;
-			m_vHistory[0].m_bSendingPacket = *pSendPacket = m_vHistory[1].m_bSendingPacket;
+			preserveCurrentPacketGate();
 			m_bModifiedAngles = true;
 		}
 
@@ -104,7 +112,7 @@ void CAntiCheatCompat::ProcessCommand(CUserCmd* pCmd, bool* pSendPacket)
 			{
 				pCmd->viewangles.y += SNAP_NOISE_EPSILON * 2;
 				m_vHistory[0].m_vAngle = pCmd->viewangles;
-				m_vHistory[0].m_bSendingPacket = *pSendPacket = m_vHistory[1].m_bSendingPacket;
+				preserveCurrentPacketGate();
 				m_bModifiedAngles = true;  
 			}
 		}

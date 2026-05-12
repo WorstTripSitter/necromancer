@@ -70,7 +70,7 @@ class CAimbotWrangler
 	bool SimulateRocketPath(const Vec3& vStart, const Vec3& vEnd, C_BaseEntity* pIgnore);
 	
 	// Aim at target
-	void Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles);
+	void Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles, bool bIsFiring);
 	
 	// Should we fire?
 	bool ShouldFire(C_TFPlayer* pLocal, C_ObjectSentrygun* pSentry, const WranglerTarget_t& target);

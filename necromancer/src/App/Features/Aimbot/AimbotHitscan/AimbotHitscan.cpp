@@ -744,18 +744,22 @@ void CAimbotHitscan::Aim(CUserCmd* pCmd, C_TFPlayer* pLocal, const Vec3& vAngles
 			break;
 		}
 		
-		// Silent (only set angles when IN_ATTACK is active - server will fire on next available tick)
+		// Silent — apply aimbot angles whenever IN_ATTACK is set (server needs
+		// correct angles on the tick it fires), but only choke the packet (pSilent)
+		// on the actual fire tick. Between shots, use normal silent (no choke).
 		case 1:
 		{
-			// Must set angles whenever IN_ATTACK is in the command,
-			// not just when G::Attacking == 1 (bCanPrimaryAttack).
-			// The server queues the shot and fires when cooldown expires,
-			// using whatever viewangles are in the cmd at that point.
 			if (pCmd->buttons & IN_ATTACK)
 			{
 				H::AimUtils->FixMovement(pCmd, vAngleTo);
 				pCmd->viewangles = vAngleTo;
-				G::bSilentAngles = true;
+
+				if (Shifting::bShifting && Shifting::bShiftingWarp)
+					G::bSilentAngles = true;  // Warp: choke handled by warp system
+				else if (G::Attacking == 1 || G::bFiring)
+					G::bSilentAngles = true;  // Fire tick: silent aim, restore view next tick
+				else
+					G::bSilentAngles = true;  // Cooldown: just hide local view, no choke
 			}
 
 			break;

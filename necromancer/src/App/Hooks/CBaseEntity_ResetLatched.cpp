@@ -1,12 +1,23 @@
 #include "../../SDK/SDK.h"
 
 #include "../Features/CFG.h"
+#include "../Features/TickbaseManip/TickbaseManip.h"
 
 MAKE_SIGNATURE(CBaseEntity_ResetLatched, "client.dll", "40 56 48 83 EC ? 48 8B 01 48 8B F1 FF 90 ? ? ? ? 84 C0 75", 0x0);
 
 MAKE_HOOK(CBaseEntity_ResetLatched, Signatures::CBaseEntity_ResetLatched.Get(), void, __fastcall,
 	void* ecx)
 {
+	// Block ResetLatched for local player ALWAYS (same as Amalgam).
+	// Without this, the engine "corrects" prediction mismatches (from
+	// recharge, doubletap, warp, etc.) by violently snapping the player.
+	// The prediction system corrects naturally via Prediction::Update.
+	{
+		const auto pLocal = H::Entities->GetLocal();
+		if (pLocal && ecx == pLocal)
+			return;
+	}
+
 	// Block ResetLatched if Disable Interp is on
 	if (CFG::Misc_Pred_Error_Jitter_Fix && CFG::Visuals_Disable_Interp)
 	{

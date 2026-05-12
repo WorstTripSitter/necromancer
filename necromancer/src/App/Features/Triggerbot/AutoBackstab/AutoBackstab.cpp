@@ -235,7 +235,7 @@ void CAutoBackstab::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 
 						if (CFG::Triggerbot_AutoBacktab_Aim_Mode == 1)
 						{
-							G::bPSilentAngles = true;
+							G::bSilentAngles = true;
 						}
 					}
 
@@ -304,7 +304,7 @@ void CAutoBackstab::Run(C_TFPlayer* pLocal, C_TFWeaponBase* pWeapon, CUserCmd* p
 
 					if (CFG::Triggerbot_AutoBacktab_Aim_Mode == 1)
 					{
-						G::bPSilentAngles = true;
+						G::bSilentAngles = true;
 					}
 				}
 
